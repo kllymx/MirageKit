@@ -17,6 +17,9 @@ actor HEVCDecoder {
     private var cachedPPS: Data?
     private var cachedFormatDescription: CMFormatDescription?
 
+    private let memoryPoolAgeOutSeconds: TimeInterval = 1.0
+    private var memoryPool: CMMemoryPool?
+
     private var isDecoding = false
     private var decodedFrameHandler: (@Sendable (CVPixelBuffer, CMTime, CGRect) -> Void)?
 
@@ -48,7 +51,30 @@ actor HEVCDecoder {
     /// Expected dimensions after resize (optional, for validation)
     private var expectedDimensions: (width: Int, height: Int)?
 
-    init() {}
+    private func configureMemoryPoolIfNeeded() {
+        guard memoryPool == nil else { return }
+        let options: [CFString: Any] = [
+            kCMMemoryPoolOption_AgeOutPeriod: NSNumber(value: memoryPoolAgeOutSeconds)
+        ]
+        memoryPool = CMMemoryPoolCreate(options: options as CFDictionary)
+    }
+
+    private func memoryPoolAllocator() -> CFAllocator {
+        configureMemoryPoolIfNeeded()
+        guard let memoryPool else { return kCFAllocatorDefault }
+        return CMMemoryPoolGetAllocator(memoryPool)
+    }
+
+    private func flushMemoryPool() {
+        guard let memoryPool else { return }
+        CMMemoryPoolFlush(memoryPool)
+    }
+
+    private func invalidateMemoryPool() {
+        guard let memoryPool else { return }
+        CMMemoryPoolInvalidate(memoryPool)
+        self.memoryPool = nil
+    }
 
     /// Set handler called when decode errors exceed threshold, indicating need for keyframe
     func setErrorThresholdHandler(_ handler: @escaping @Sendable () -> Void) {
@@ -144,13 +170,14 @@ actor HEVCDecoder {
         }
         decompressionSession = nil
         formatDescription = nil
-        outputPixelFormat = kCVPixelFormatType_ARGB2101010LEPacked
 
         // Clear cached parameter sets
         cachedVPS = nil
         cachedSPS = nil
         cachedPPS = nil
         cachedFormatDescription = nil
+
+        invalidateMemoryPool()
     }
 
     /// Reset the decoder state for a new stream session (e.g., after resize or reconnection).
@@ -183,6 +210,8 @@ actor HEVCDecoder {
         if wasBlocking {
             onInputBlockingChanged?(false)
         }
+
+        flushMemoryPool()
 
         MirageLogger.decoder("Decoder reset for new session - awaiting fresh keyframe")
     }
@@ -241,14 +270,15 @@ actor HEVCDecoder {
         }
 
         // Create block buffer with owned memory (VideoToolbox decodes asynchronously)
-        // Using kCFAllocatorDefault ensures CMBlockBuffer allocates and owns the memory,
-        // preventing use-after-free when frameData goes out of scope
+        // Using the memory pool allocator ensures CMBlockBuffer owns the memory and
+        // reduces allocation churn across frames.
+        let allocator = memoryPoolAllocator()
         var blockBuffer: CMBlockBuffer?
         var status = CMBlockBufferCreateWithMemoryBlock(
             allocator: kCFAllocatorDefault,
             memoryBlock: nil,
             blockLength: frameData.count,
-            blockAllocator: kCFAllocatorDefault,
+            blockAllocator: allocator,
             customBlockSource: nil,
             offsetToData: 0,
             dataLength: frameData.count,

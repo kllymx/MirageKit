@@ -29,6 +29,8 @@ actor StreamPacketSender {
     nonisolated(unsafe) private var queuedBytes: Int = 0
     private let queueLock = NSLock()
     private let pacingBurstSize = 8
+    private let pacingThresholdBytes = 512 * 1024
+    private let pacingDelay = Duration.milliseconds(1)
 
     init(maxPayloadSize: Int, onEncodedFrame: @escaping @Sendable (Data, FrameHeader) -> Void) {
         self.maxPayloadSize = maxPayloadSize
@@ -115,6 +117,7 @@ actor StreamPacketSender {
 
         let burstSize = min(pacingBurstSize, totalFragments)
         let burstCount = max(1, (totalFragments + burstSize - 1) / burstSize)
+        let shouldPace = item.encodedData.count >= pacingThresholdBytes && burstCount > 1
 
         var currentSequence = item.sequenceNumberStart
 
@@ -157,6 +160,10 @@ actor StreamPacketSender {
                 packet.append(fragmentData)
 
                 onEncodedFrame(packet, header)
+            }
+
+            if shouldPace && burstIndex < burstCount - 1 {
+                try? await Task.sleep(for: pacingDelay)
             }
         }
 

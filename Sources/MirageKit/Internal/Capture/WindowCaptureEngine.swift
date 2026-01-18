@@ -12,15 +12,15 @@ import AppKit
 struct CapturedFrameInfo: Sendable {
     /// The pixel buffer content area (excluding black padding)
     let contentRect: CGRect
-    /// Regions that changed since the last frame (in pixel coordinates)
-    let dirtyRects: [CGRect]
     /// Total area of dirty regions as percentage of frame (0-100)
     let dirtyPercentage: Float
+    /// True when SCK reports the frame as idle (no changes)
+    let isIdleFrame: Bool
 
-    init(contentRect: CGRect, dirtyRects: [CGRect], dirtyPercentage: Float) {
+    init(contentRect: CGRect, dirtyPercentage: Float, isIdleFrame: Bool) {
         self.contentRect = contentRect
-        self.dirtyRects = dirtyRects
         self.dirtyPercentage = dirtyPercentage
+        self.isIdleFrame = isIdleFrame
     }
 }
 
@@ -28,10 +28,14 @@ actor WindowCaptureEngine {
     private var stream: SCStream?
     private var streamOutput: CaptureStreamOutput?
     private let configuration: MirageEncoderConfiguration
+    private var currentFrameRate: Int
     private var pendingKeyframeRequest = false
     private var isCapturing = false
+    private var isRestarting = false
     private var capturedFrameHandler: (@Sendable (CMSampleBuffer, CapturedFrameInfo) -> Void)?
     private var dimensionChangeHandler: (@Sendable (Int, Int) -> Void)?
+    private var captureMode: CaptureMode?
+    private var captureSessionConfig: CaptureSessionConfiguration?
 
     // Track current dimensions to detect changes
     private var currentWidth: Int = 0
@@ -40,13 +44,69 @@ actor WindowCaptureEngine {
     private var outputScale: CGFloat = 1.0
     private var useBestCaptureResolution: Bool = true
     private var contentFilter: SCContentFilter?
- 
+    private var lastRestartTime: CFAbsoluteTime = 0
+    private let restartCooldown: CFAbsoluteTime = 1.5
+
     init(configuration: MirageEncoderConfiguration) {
         self.configuration = configuration
+        self.currentFrameRate = configuration.targetFrameRate
+    }
+
+    private enum CaptureMode {
+        case window
+        case display
+    }
+
+    private struct CaptureSessionConfiguration {
+        let window: SCWindow?
+        let application: SCRunningApplication?
+        let display: SCDisplay
+        let knownScaleFactor: CGFloat?
+        let outputScale: CGFloat
+        let resolution: CGSize?
+        let showsCursor: Bool
+    }
+
+    private var captureQueueDepth: Int {
+        if currentFrameRate >= 120 {
+            return 6
+        }
+        if currentFrameRate >= 60 {
+            return 5
+        }
+        return 4
+    }
+
+    private func frameGapThreshold(for frameRate: Int) -> CFAbsoluteTime {
+        if frameRate >= 120 {
+            return 0.18
+        }
+        if frameRate >= 60 {
+            return 0.30
+        }
+        if frameRate >= 30 {
+            return 0.50
+        }
+        return 1.5
+    }
+
+    private func stallThreshold(for frameRate: Int) -> CFAbsoluteTime {
+        if frameRate >= 120 {
+            return 0.75
+        }
+        if frameRate >= 60 {
+            return 1.25
+        }
+        if frameRate >= 30 {
+            return 2.0
+        }
+        return 4.0
     }
 
     private var pixelFormatType: OSType {
         switch configuration.pixelFormat {
+        case .p010:
+            return kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
         case .bgr10a2:
             return kCVPixelFormatType_ARGB2101010LEPacked
         case .bgra8:
@@ -98,6 +158,16 @@ actor WindowCaptureEngine {
         currentScaleFactor = target.hostScaleFactor * clampedScale
         currentWidth = Self.alignedEvenPixel(CGFloat(target.width) * clampedScale)
         currentHeight = Self.alignedEvenPixel(CGFloat(target.height) * clampedScale)
+        captureMode = .window
+        captureSessionConfig = CaptureSessionConfiguration(
+            window: window,
+            application: application,
+            display: display,
+            knownScaleFactor: knownScaleFactor,
+            outputScale: clampedScale,
+            resolution: nil,
+            showsCursor: false
+        )
 
         // CRITICAL: For virtual displays on headless Macs, do NOT use .best or .nominal
         // as they may capture at wrong resolution (1x instead of 2x).
@@ -117,7 +187,7 @@ actor WindowCaptureEngine {
         // Frame rate
         streamConfig.minimumFrameInterval = CMTime(
             value: 1,
-            timescale: CMTimeScale(configuration.targetFrameRate)
+            timescale: CMTimeScale(currentFrameRate)
         )
 
         // Color and format - 10-bit ARGB2101010 or 8-bit NV12
@@ -132,7 +202,7 @@ actor WindowCaptureEngine {
 
         // Capture settings
         streamConfig.showsCursor = false  // Don't capture cursor - iPad shows its own
-        streamConfig.queueDepth = 5       // Buffer through brief SCK pauses during drags/menus
+        streamConfig.queueDepth = captureQueueDepth
 
         // Use window-level capture for precise dimensions (captures just this window)
         // Note: This may not capture modal dialogs/sheets, but avoids black bars from app-level bounding box
@@ -155,15 +225,21 @@ actor WindowCaptureEngine {
             onKeyframeRequest: { [weak self] in
                 Task { await self?.markKeyframeRequested() }
             },
-            windowID: window.windowID
+            onCaptureStall: { [weak self] reason in
+                Task { await self?.restartCapture(reason: reason) }
+            },
+            windowID: window.windowID,
+            usesDetailedMetadata: true,
+            frameGapThreshold: frameGapThreshold(for: currentFrameRate),
+            stallThreshold: stallThreshold(for: currentFrameRate),
+            expectedFrameRate: Double(currentFrameRate)
         )
 
-        // Use nil queue (like Ensemble) to avoid blocking encoder during drags/menus
-        // The default queue handles frame delivery without stalling the capture pipeline
+        // Use a high-priority capture queue so SCK delivery doesn't contend with UI work
         try stream.addStreamOutput(
             streamOutput!,
             type: .screen,
-            sampleHandlerQueue: nil
+            sampleHandlerQueue: DispatchQueue(label: "com.mirage.capture.output", qos: .userInteractive)
         )
 
         // Start capturing
@@ -187,6 +263,52 @@ actor WindowCaptureEngine {
         isCapturing = false
     }
 
+    private func restartCapture(reason: String) async {
+        guard !isRestarting else { return }
+        guard let config = captureSessionConfig, let mode = captureMode else { return }
+        guard let onFrame = capturedFrameHandler else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastRestartTime > restartCooldown else { return }
+
+        isRestarting = true
+        lastRestartTime = now
+        MirageLogger.capture("Restarting capture (\(reason))")
+
+        await stopCapture()
+
+        do {
+            switch mode {
+            case .window:
+                guard let window = config.window, let application = config.application else {
+                    MirageLogger.error(.capture, "Capture restart failed: missing window/application")
+                    break
+                }
+                try await startCapture(
+                    window: window,
+                    application: application,
+                    display: config.display,
+                    knownScaleFactor: config.knownScaleFactor,
+                    outputScale: config.outputScale,
+                    onFrame: onFrame,
+                    onDimensionChange: dimensionChangeHandler ?? { _, _ in }
+                )
+            case .display:
+                try await startDisplayCapture(
+                    display: config.display,
+                    resolution: config.resolution,
+                    showsCursor: config.showsCursor,
+                    onFrame: onFrame,
+                    onDimensionChange: dimensionChangeHandler ?? { _, _ in }
+                )
+            }
+            pendingKeyframeRequest = true
+        } catch {
+            MirageLogger.error(.capture, "Capture restart failed: \(error)")
+        }
+
+        isRestarting = false
+    }
+
     /// Update stream dimensions when the host window is resized
     /// Output resolution can be scaled for bandwidth savings.
     func updateDimensions(windowFrame: CGRect, outputScale: CGFloat? = nil) async throws {
@@ -198,6 +320,17 @@ actor WindowCaptureEngine {
         currentScaleFactor = target.hostScaleFactor * scale
         let newWidth = Self.alignedEvenPixel(CGFloat(target.width) * scale)
         let newHeight = Self.alignedEvenPixel(CGFloat(target.height) * scale)
+        if let config = captureSessionConfig {
+            captureSessionConfig = CaptureSessionConfiguration(
+                window: config.window,
+                application: config.application,
+                display: config.display,
+                knownScaleFactor: config.knownScaleFactor,
+                outputScale: scale,
+                resolution: config.resolution,
+                showsCursor: config.showsCursor
+            )
+        }
 
         // Don't update if dimensions haven't actually changed
         guard newWidth != currentWidth || newHeight != currentHeight else { return }
@@ -219,14 +352,14 @@ actor WindowCaptureEngine {
         streamConfig.height = newHeight
         streamConfig.minimumFrameInterval = CMTime(
             value: 1,
-            timescale: CMTimeScale(configuration.targetFrameRate)
+            timescale: CMTimeScale(currentFrameRate)
         )
         streamConfig.pixelFormat = pixelFormatType
         streamConfig.colorSpaceName = configuration.colorSpace == .displayP3
             ? CGColorSpace.displayP3
             : CGColorSpace.sRGB
         streamConfig.showsCursor = false
-        streamConfig.queueDepth = 5  // Buffer through brief SCK pauses during drags/menus
+        streamConfig.queueDepth = captureQueueDepth
 
         // Update the stream configuration
         try await stream.updateConfiguration(streamConfig)
@@ -249,24 +382,33 @@ actor WindowCaptureEngine {
 
         currentWidth = width
         currentHeight = height
+        useBestCaptureResolution = false
+        if let config = captureSessionConfig {
+            captureSessionConfig = CaptureSessionConfiguration(
+                window: config.window,
+                application: config.application,
+                display: config.display,
+                knownScaleFactor: config.knownScaleFactor,
+                outputScale: config.outputScale,
+                resolution: CGSize(width: width, height: height),
+                showsCursor: config.showsCursor
+            )
+        }
 
         // Create new stream configuration with client's exact pixel dimensions
         let streamConfig = SCStreamConfiguration()
-        if useBestCaptureResolution {
-            streamConfig.captureResolution = .best
-        }
         streamConfig.width = width
         streamConfig.height = height
         streamConfig.minimumFrameInterval = CMTime(
             value: 1,
-            timescale: CMTimeScale(configuration.targetFrameRate)
+            timescale: CMTimeScale(currentFrameRate)
         )
         streamConfig.pixelFormat = pixelFormatType
         streamConfig.colorSpaceName = configuration.colorSpace == .displayP3
             ? CGColorSpace.displayP3
             : CGColorSpace.sRGB
         streamConfig.showsCursor = false
-        streamConfig.queueDepth = 5  // Buffer through brief SCK pauses during drags/menus
+        streamConfig.queueDepth = captureQueueDepth
 
         try await stream.updateConfiguration(streamConfig)
         MirageLogger.capture("Resolution updated to client dimensions: \(width)x\(height)")
@@ -288,6 +430,18 @@ actor WindowCaptureEngine {
         // Update dimensions
         currentWidth = newWidth
         currentHeight = newHeight
+        useBestCaptureResolution = false
+        if let config = captureSessionConfig {
+            captureSessionConfig = CaptureSessionConfiguration(
+                window: config.window,
+                application: config.application,
+                display: newDisplay,
+                knownScaleFactor: config.knownScaleFactor,
+                outputScale: config.outputScale,
+                resolution: resolution,
+                showsCursor: config.showsCursor
+            )
+        }
 
         // Create new filter for the new display
         let newFilter = SCContentFilter(display: newDisplay, excludingWindows: [])
@@ -302,14 +456,14 @@ actor WindowCaptureEngine {
         streamConfig.height = newHeight
         streamConfig.minimumFrameInterval = CMTime(
             value: 1,
-            timescale: CMTimeScale(configuration.targetFrameRate)
+            timescale: CMTimeScale(currentFrameRate)
         )
         streamConfig.pixelFormat = pixelFormatType
         streamConfig.colorSpaceName = configuration.colorSpace == .displayP3
             ? CGColorSpace.displayP3
             : CGColorSpace.sRGB
         streamConfig.showsCursor = false
-        streamConfig.queueDepth = 5  // Buffer through brief SCK pauses during drags/menus
+        streamConfig.queueDepth = captureQueueDepth
 
         // Apply both filter and configuration updates
         try await stream.updateContentFilter(newFilter)
@@ -324,6 +478,7 @@ actor WindowCaptureEngine {
         guard isCapturing, let stream else { return }
 
         MirageLogger.capture("Updating frame rate to \(fps) fps")
+        currentFrameRate = fps
 
         // Create new stream configuration with updated frame rate
         let streamConfig = SCStreamConfiguration()
@@ -341,9 +496,14 @@ actor WindowCaptureEngine {
             ? CGColorSpace.displayP3
             : CGColorSpace.sRGB
         streamConfig.showsCursor = false
-        streamConfig.queueDepth = 5  // Buffer through brief SCK pauses during drags/menus
+        streamConfig.queueDepth = captureQueueDepth
 
         try await stream.updateConfiguration(streamConfig)
+        streamOutput?.updateExpectations(
+            frameRate: fps,
+            gapThreshold: frameGapThreshold(for: fps),
+            stallThreshold: stallThreshold(for: fps)
+        )
         MirageLogger.capture("Frame rate updated to \(fps) fps")
     }
 
@@ -382,6 +542,21 @@ actor WindowCaptureEngine {
         let captureResolution = resolution ?? CGSize(width: display.width, height: display.height)
         currentWidth = max(1, Int(captureResolution.width))
         currentHeight = max(1, Int(captureResolution.height))
+        captureMode = .display
+        captureSessionConfig = CaptureSessionConfiguration(
+            window: nil,
+            application: nil,
+            display: display,
+            knownScaleFactor: nil,
+            outputScale: 1.0,
+            resolution: resolution,
+            showsCursor: showsCursor
+        )
+
+        if let displayMode = CGDisplayCopyDisplayMode(display.displayID) {
+            let refreshRate = displayMode.refreshRate
+            MirageLogger.capture("Display mode refresh rate: \(refreshRate)")
+        }
 
         // Calculate scale factor: if resolution was explicitly provided (HiDPI override),
         // compare it to display's reported dimensions to determine the scale
@@ -392,13 +567,13 @@ actor WindowCaptureEngine {
             currentScaleFactor = 1.0
         }
 
-        // CRITICAL: For HiDPI displays, force ScreenCaptureKit to capture at pixel resolution
-        // Without this, SCK captures at logical (point) resolution and we get half-res frames
-        // .best tells SCK to use the highest available resolution (pixel resolution for Retina/HiDPI)
-        useBestCaptureResolution = currentScaleFactor > 1.0
+        // For explicit resolution overrides (virtual displays), rely on width/height and skip .best
+        useBestCaptureResolution = (resolution == nil)
         if useBestCaptureResolution {
             streamConfig.captureResolution = .best
             MirageLogger.capture("HiDPI capture: scale=\(currentScaleFactor), forcing captureResolution=.best")
+        } else if currentScaleFactor > 1.0 {
+            MirageLogger.capture("HiDPI capture: scale=\(currentScaleFactor), using explicit resolution")
         }
 
         streamConfig.width = currentWidth
@@ -407,7 +582,7 @@ actor WindowCaptureEngine {
         // Frame rate
         streamConfig.minimumFrameInterval = CMTime(
             value: 1,
-            timescale: CMTimeScale(configuration.targetFrameRate)
+            timescale: CMTimeScale(currentFrameRate)
         )
 
         // Color and format
@@ -424,7 +599,7 @@ actor WindowCaptureEngine {
         // - Login screen: show cursor (true) for user interaction
         // - Desktop streaming: hide cursor (false) - client renders its own
         streamConfig.showsCursor = showsCursor
-        streamConfig.queueDepth = 5  // Buffer through brief SCK pauses during drags/menus
+        streamConfig.queueDepth = captureQueueDepth
 
         // Capture displayID before creating filter (for logging after)
         let capturedDisplayID = display.displayID
@@ -448,15 +623,20 @@ actor WindowCaptureEngine {
             onKeyframeRequest: { [weak self] in
                 Task { await self?.markKeyframeRequested() }
             },
-            frameGapThreshold: 0.300
+            onCaptureStall: { [weak self] reason in
+                Task { await self?.restartCapture(reason: reason) }
+            },
+            usesDetailedMetadata: false,
+            frameGapThreshold: frameGapThreshold(for: currentFrameRate),
+            stallThreshold: stallThreshold(for: currentFrameRate),
+            expectedFrameRate: Double(currentFrameRate)
         )
 
-        // Use nil queue (like Ensemble) to avoid blocking encoder during drags/menus
-        // The default queue handles frame delivery without stalling the capture pipeline
+        // Use a high-priority capture queue so SCK delivery doesn't contend with UI work
         try stream.addStreamOutput(
             streamOutput!,
             type: .screen,
-            sampleHandlerQueue: nil
+            sampleHandlerQueue: DispatchQueue(label: "com.mirage.capture.output", qos: .userInteractive)
         )
 
         // Start capturing
@@ -492,19 +672,23 @@ actor WindowCaptureEngine {
 private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let onFrame: @Sendable (CMSampleBuffer, CapturedFrameInfo) -> Void
     private let onKeyframeRequest: @Sendable () -> Void
+    private let onCaptureStall: @Sendable (String) -> Void
+    private let usesDetailedMetadata: Bool
     private var frameCount: UInt64 = 0
     private var skippedIdleFrames: UInt64 = 0
-    private var smallChangeFrames: UInt64 = 0  // Track frames with small dirty regions
-    private var skippedByPixelDetection: UInt64 = 0  // Frames skipped by our pixel detector
 
     // DIAGNOSTIC: Track all frame statuses to debug drag/menu freeze issue
     private var statusCounts: [Int: UInt64] = [:]
     private var lastStatusLogTime: CFAbsoluteTime = 0
     private var lastFrameTime: CFAbsoluteTime = 0
     private var maxFrameGap: CFAbsoluteTime = 0
-
-    /// Legacy CPU-based detector (disabled due to SCK buffer reuse issue)
-    private let dirtyDetector = DirtyRegionDetector()
+    private var lastFpsLogTime: CFAbsoluteTime = 0
+    private var deliveredFrameCount: UInt64 = 0
+    private var deliveredCompleteCount: UInt64 = 0
+    private var deliveredIdleCount: UInt64 = 0
+    private var stallSignaled: Bool = false
+    private var lastStallTime: CFAbsoluteTime = 0
+    private var lastContentRect: CGRect = .zero
 
     // Frame gap watchdog: when SCK stops delivering frames (during menus/drags),
     // mark fallback mode so resume can trigger a keyframe request
@@ -512,7 +696,10 @@ private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Se
     private let watchdogQueue = DispatchQueue(label: "com.mirage.capture.watchdog", qos: .userInteractive)
     private var windowID: CGWindowID = 0
     private var lastDeliveredFrameTime: CFAbsoluteTime = 0
-    private let frameGapThreshold: CFAbsoluteTime
+    private var frameGapThreshold: CFAbsoluteTime
+    private var stallThreshold: CFAbsoluteTime
+    private var expectedFrameRate: Double
+    private let expectationLock = NSLock()
 
     // Track if we've been in fallback mode - when SCK resumes, we may need a keyframe
     // to prevent decode errors from reference frame discontinuity
@@ -527,13 +714,21 @@ private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Se
     init(
         onFrame: @escaping @Sendable (CMSampleBuffer, CapturedFrameInfo) -> Void,
         onKeyframeRequest: @escaping @Sendable () -> Void,
+        onCaptureStall: @escaping @Sendable (String) -> Void = { _ in },
         windowID: CGWindowID = 0,
-        frameGapThreshold: CFAbsoluteTime = 0.100
+        usesDetailedMetadata: Bool = false,
+        frameGapThreshold: CFAbsoluteTime = 0.100,
+        stallThreshold: CFAbsoluteTime = 1.0,
+        expectedFrameRate: Double = 0
     ) {
         self.onFrame = onFrame
         self.onKeyframeRequest = onKeyframeRequest
+        self.onCaptureStall = onCaptureStall
         self.windowID = windowID
+        self.usesDetailedMetadata = usesDetailedMetadata
         self.frameGapThreshold = frameGapThreshold
+        self.stallThreshold = stallThreshold
+        self.expectedFrameRate = expectedFrameRate
         super.init()
         startWatchdogTimer()
     }
@@ -547,19 +742,31 @@ private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Se
         let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
         // Check every 50ms for fallback during drag operations
         // Initial delay matches frameGapThreshold
-        let initialDelayMs = max(50, Int(frameGapThreshold * 1000))
+        let initialDelayMs = expectationLock.withLock { max(50, Int(frameGapThreshold * 1000)) }
         timer.schedule(deadline: .now() + .milliseconds(initialDelayMs), repeating: .milliseconds(50))
         timer.setEventHandler { [weak self] in
             self?.checkForFrameGap()
         }
         timer.resume()
         watchdogTimer = timer
-        MirageLogger.capture("Frame gap watchdog started (\(Int(frameGapThreshold * 1000))ms threshold, 50ms check interval)")
+        let thresholdMs = expectationLock.withLock { Int(frameGapThreshold * 1000) }
+        MirageLogger.capture("Frame gap watchdog started (\(thresholdMs)ms threshold, 50ms check interval)")
     }
 
     func stopWatchdogTimer() {
         watchdogTimer?.cancel()
         watchdogTimer = nil
+    }
+
+    func updateExpectations(frameRate: Int, gapThreshold: CFAbsoluteTime, stallThreshold: CFAbsoluteTime) {
+        expectationLock.withLock {
+            expectedFrameRate = Double(frameRate)
+            frameGapThreshold = gapThreshold
+            self.stallThreshold = stallThreshold
+        }
+        stallSignaled = false
+        stopWatchdogTimer()
+        startWatchdogTimer()
     }
 
     /// Reset fallback state (called during dimension changes)
@@ -577,10 +784,20 @@ private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Se
         guard lastDeliveredFrameTime > 0 else { return }
 
         let gap = now - lastDeliveredFrameTime
-        guard gap > frameGapThreshold else { return }
+        let (gapThreshold, stallLimit) = expectationLock.withLock {
+            (frameGapThreshold, stallThreshold)
+        }
+        guard gap > gapThreshold else { return }
 
         // SCK has stopped delivering - mark fallback mode
         markFallbackModeForGap()
+
+        if gap > stallLimit, !stallSignaled, now - lastStallTime > stallLimit {
+            stallSignaled = true
+            lastStallTime = now
+            let gapMs = (gap * 1000).formatted(.number.precision(.fractionLength(1)))
+            onCaptureStall("frame gap \(gapMs)ms")
+        }
     }
 
     /// Mark fallback mode when SCK stops delivering frames.
@@ -646,9 +863,9 @@ private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Se
         }
 
         // Check SCFrameStatus - track all statuses for diagnostics
+        let attachments = (CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]])?.first
         var isIdleFrame = false
-        if let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
-           let attachments = attachmentsArray.first,
+        if let attachments,
            let statusRawValue = attachments[.status] as? Int,
            let status = SCFrameStatus(rawValue: statusRawValue) {
 
@@ -696,88 +913,72 @@ private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Se
             // when SCK stops delivering frames entirely.
             if status == .complete || status == .idle {
                 lastDeliveredFrameTime = captureTime
+                stallSignaled = false
+                deliveredFrameCount += 1
+                if status == .idle {
+                    deliveredIdleCount += 1
+                } else {
+                    deliveredCompleteCount += 1
+                }
+                if lastFpsLogTime == 0 {
+                    lastFpsLogTime = captureTime
+                } else if captureTime - lastFpsLogTime > 2.0 {
+                    let elapsed = captureTime - lastFpsLogTime
+                    let fps = Double(deliveredFrameCount) / elapsed
+                    let fpsText = fps.formatted(.number.precision(.fractionLength(1)))
+                    MirageLogger.capture("Capture fps: \(fpsText) (complete=\(deliveredCompleteCount), idle=\(deliveredIdleCount))")
+                    deliveredFrameCount = 0
+                    deliveredCompleteCount = 0
+                    deliveredIdleCount = 0
+                    lastFpsLogTime = captureTime
+                }
             }
         }
 
-        // Extract contentRect, scaleFactor, and dirtyRects from SCStreamFrameInfo attachments
-        var contentRect = CGRect.zero
-        var scaleFactor: CGFloat = 1.0
-        var dirtyRects: [CGRect] = []
-
-        if let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
-           let attachments = attachmentsArray.first {
-
-            // Extract scaleFactor first (contentRect is in 1x points, buffer may be 2x pixels)
+        // Extract contentRect when detailed metadata is enabled. For display capture,
+        // fast-path to full-buffer rect to minimize per-frame work.
+        let bufferWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let bufferHeight = CVPixelBufferGetHeight(pixelBuffer)
+        var contentRect = CGRect(x: 0, y: 0, width: CGFloat(bufferWidth), height: CGFloat(bufferHeight))
+        if usesDetailedMetadata,
+           !isIdleFrame,
+           let attachments,
+           let contentRectValue = attachments[.contentRect] {
+            let scaleFactor: CGFloat
             if let scale = attachments[.scaleFactor] as? CGFloat {
                 scaleFactor = scale
             } else if let scale = attachments[.scaleFactor] as? Double {
                 scaleFactor = CGFloat(scale)
             } else if let scale = attachments[.scaleFactor] as? NSNumber {
                 scaleFactor = CGFloat(scale.doubleValue)
+            } else {
+                scaleFactor = 1.0
             }
-
-            // Extract contentRect
-            if let contentRectValue = attachments[.contentRect] {
-                let contentRectDict = contentRectValue as! CFDictionary
-                if let rect = CGRect(dictionaryRepresentation: contentRectDict) {
-                    // Apply scaleFactor to convert from points to buffer pixels
-                    contentRect = CGRect(
-                        x: rect.origin.x * scaleFactor,
-                        y: rect.origin.y * scaleFactor,
-                        width: rect.width * scaleFactor,
-                        height: rect.height * scaleFactor
-                    )
-                }
+            let contentRectDict = contentRectValue as! CFDictionary
+            if let rect = CGRect(dictionaryRepresentation: contentRectDict) {
+                contentRect = CGRect(
+                    x: rect.origin.x * scaleFactor,
+                    y: rect.origin.y * scaleFactor,
+                    width: rect.width * scaleFactor,
+                    height: rect.height * scaleFactor
+                )
+                lastContentRect = contentRect
+            } else if !lastContentRect.isEmpty {
+                contentRect = lastContentRect
             }
-
-            // Extract dirty rects - regions that changed since last frame
-            if let dirtyRectsValue = attachments[.dirtyRects] as? [Any] {
-                for rectValue in dirtyRectsValue {
-                    // Cast to CFDictionary for CGRect initialization
-                    let rectDict = rectValue as CFTypeRef
-                    if CFGetTypeID(rectDict) == CFDictionaryGetTypeID(),
-                       let rect = CGRect(dictionaryRepresentation: rectDict as! CFDictionary) {
-                        // Apply scaleFactor to convert to buffer pixels
-                        let scaledRect = CGRect(
-                            x: rect.origin.x * scaleFactor,
-                            y: rect.origin.y * scaleFactor,
-                            width: rect.width * scaleFactor,
-                            height: rect.height * scaleFactor
-                        )
-                        dirtyRects.append(scaledRect)
-                    }
-                }
-            }
+        } else if !lastContentRect.isEmpty {
+            contentRect = lastContentRect
         }
 
-        // Calculate dirty region statistics for logging
-        let bufferWidth = CVPixelBufferGetWidth(pixelBuffer)
-        let bufferHeight = CVPixelBufferGetHeight(pixelBuffer)
+        // Calculate dirty region statistics for diagnostics only.
         let totalPixels = bufferWidth * bufferHeight
-
-        // Clip dirty rects to buffer bounds (ScreenCaptureKit can report out-of-bounds rects after resolution changes)
-        let clippedDirtyRects = dirtyRects.map { rect -> CGRect in
-            let clippedX = max(0, min(rect.origin.x, CGFloat(bufferWidth)))
-            let clippedY = max(0, min(rect.origin.y, CGFloat(bufferHeight)))
-            let clippedWidth = min(rect.width, CGFloat(bufferWidth) - clippedX)
-            let clippedHeight = min(rect.height, CGFloat(bufferHeight) - clippedY)
-            return CGRect(x: clippedX, y: clippedY, width: max(0, clippedWidth), height: max(0, clippedHeight))
-        }
-
-        // Calculate dirty percentage from SCK's reported dirty rects (for diagnostics/telemetry)
-        // Note: P-frames handle delta compression natively - this is informational only
-        let dirtyArea = clippedDirtyRects.reduce(0) { $0 + Int($1.width * $1.height) }
-        let dirtyPercentage = totalPixels > 0 ? min(100.0, (Float(dirtyArea) / Float(totalPixels)) * 100) : 0
-
-        // Use clipped rects for the frame info
-        let finalDirtyRects = clippedDirtyRects
-
-        // Note: P-frames handle delta compression natively in HEVC - no need for
-        // Metal-based dirty detection. The encoder only encodes changed pixels.
-
-        // Track small change frames (less than 5% of screen changed)
-        if dirtyPercentage > 0 && dirtyPercentage < 5 {
-            smallChangeFrames += 1
+        let dirtyPercentage: Float
+        if isIdleFrame {
+            dirtyPercentage = 0
+        } else if totalPixels > 0 {
+            dirtyPercentage = 100
+        } else {
+            dirtyPercentage = 0
         }
 
         // Fallback: if contentRect is zero/invalid, use full buffer dimensions
@@ -796,12 +997,12 @@ private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Se
             MirageLogger.capture("Frame \(frameCount): \(bufferWidth)x\(bufferHeight)")
         }
 
-        // Create frame info with all capture metadata (using clipped rects)
+        // Create frame info with minimal capture metadata
         // Keyframe requests are now handled by StreamContext cadence, so don't flag here.
         let frameInfo = CapturedFrameInfo(
             contentRect: contentRect,
-            dirtyRects: finalDirtyRects,
-            dirtyPercentage: dirtyPercentage
+            dirtyPercentage: dirtyPercentage,
+            isIdleFrame: isIdleFrame
         )
 
         onFrame(sampleBuffer, frameInfo)

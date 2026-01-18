@@ -51,11 +51,11 @@ sequenceDiagram
     Client->>Host: TCP hello + capabilities
     Host-->>Client: helloResponse + dataPort
     Client->>Host: startStream / startDesktopStream
-    Host-->>Client: streamStarted + dimensionToken
-    Client->>Host: UDP registration (streamID)
+    Host-->>Client: streamStarted / desktopStreamStarted + dimensionToken
+    Client->>Host: UDP registration (streamID + deviceID)
     Host-->>Client: UDP video packets (FrameHeader + payload)
-    Client-->>Host: keyframeRequest (as needed)
-    Client->>Host: inputEvent messages (mouse/keyboard/scroll)
+    Client-->>Host: TCP keyframeRequest (as needed)
+    Client->>Host: TCP inputEvent messages (mouse/keyboard/scroll)
 ```
 
 ## Streaming Modes

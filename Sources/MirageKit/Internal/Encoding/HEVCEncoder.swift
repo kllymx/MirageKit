@@ -9,6 +9,13 @@ import CoreVideo
 actor HEVCEncoder {
     private var compressionSession: VTCompressionSession?
     private let configuration: MirageEncoderConfiguration
+    private var activePixelFormat: MiragePixelFormat
+    private var supportedPropertyKeys: Set<CFString> = []
+    private var didQuerySupportedProperties = false
+    private var loggedUnsupportedKeys: Set<CFString> = []
+    private var didLogPixelFormat = false
+    private var baseQuality: Float
+    private var qualityOverrideActive = false
 
     private var isEncoding = false
     private var frameNumber: UInt64 = 0
@@ -21,6 +28,10 @@ actor HEVCEncoder {
     private var currentWidth: Int = 0
     private var currentHeight: Int = 0
 
+    nonisolated(unsafe) private let encoderInFlightLimit: Int
+    nonisolated(unsafe) private var encoderInFlightCount: Int = 0
+    nonisolated(unsafe) private let encoderInFlightLock = NSLock()
+
     /// Session version counter - incremented on each dimension change
     /// Used to discard frames from old sessions during transitions
     /// nonisolated(unsafe) because it's accessed from VT callback (different thread)
@@ -29,10 +40,15 @@ actor HEVCEncoder {
 
     init(configuration: MirageEncoderConfiguration) {
         self.configuration = configuration
+        self.activePixelFormat = configuration.pixelFormat
+        self.encoderInFlightLimit = configuration.targetFrameRate >= 120 ? 2 : 1
+        self.baseQuality = configuration.frameQuality
     }
 
     private var pixelFormatType: OSType {
-        switch configuration.pixelFormat {
+        switch activePixelFormat {
+        case .p010:
+            return kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
         case .bgr10a2:
             return kCVPixelFormatType_ARGB2101010LEPacked
         case .bgra8:
@@ -41,8 +57,8 @@ actor HEVCEncoder {
     }
 
     private var profileLevel: CFString {
-        switch configuration.pixelFormat {
-        case .bgr10a2:
+        switch activePixelFormat {
+        case .p010, .bgr10a2:
             return kVTProfileLevel_HEVC_Main10_AutoLevel
         case .bgra8:
             return kVTProfileLevel_HEVC_Main_AutoLevel
@@ -57,22 +73,21 @@ actor HEVCEncoder {
             kCVPixelBufferPixelFormatTypeKey: pixelFormatType,
             kCVPixelBufferWidthKey: width,
             kCVPixelBufferHeightKey: height,
-            kCVPixelBufferMetalCompatibilityKey: true
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
         ] as CFDictionary
 
         let baseSpec: [CFString: Any] = [
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
             kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true
         ]
-        var spec = baseSpec
-        spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = kCFBooleanTrue
 
         var status = VTCompressionSessionCreate(
             allocator: kCFAllocatorDefault,
             width: Int32(width),
             height: Int32(height),
             codecType: kCMVideoCodecType_HEVC,
-            encoderSpecification: spec as CFDictionary,
+            encoderSpecification: baseSpec as CFDictionary,
             imageBufferAttributes: imageBufferAttributes,
             compressedDataAllocator: nil,
             outputCallback: nil,
@@ -80,7 +95,15 @@ actor HEVCEncoder {
             compressionSessionOut: &session
         )
 
-        if status != noErr {
+        if status != noErr, activePixelFormat == .p010 {
+            activePixelFormat = .bgr10a2
+            let fallbackAttributes: CFDictionary = [
+                kCVPixelBufferPixelFormatTypeKey: pixelFormatType,
+                kCVPixelBufferWidthKey: width,
+                kCVPixelBufferHeightKey: height,
+                kCVPixelBufferMetalCompatibilityKey: true
+            ] as CFDictionary
+
             session = nil
             status = VTCompressionSessionCreate(
                 allocator: kCFAllocatorDefault,
@@ -88,14 +111,14 @@ actor HEVCEncoder {
                 height: Int32(height),
                 codecType: kCMVideoCodecType_HEVC,
                 encoderSpecification: baseSpec as CFDictionary,
-                imageBufferAttributes: imageBufferAttributes,
+                imageBufferAttributes: fallbackAttributes,
                 compressedDataAllocator: nil,
                 outputCallback: nil,
                 refcon: nil,
                 compressionSessionOut: &session
             )
             if status == noErr {
-                MirageLogger.encoder("Low-latency rate control unavailable; using standard encoder")
+                MirageLogger.encoder("P010 unsupported; using ARGB2101010")
             }
         }
 
@@ -103,14 +126,24 @@ actor HEVCEncoder {
             throw MirageError.encodingError(NSError(domain: NSOSStatusErrorDomain, code: Int(status)))
         }
 
+        loadSupportedProperties(session)
         try configureSession(session)
+        logHardwareStatus(session)
         compressionSession = session
 
         // Store dimensions for reset
         currentWidth = width
         currentHeight = height
 
-        let formatLabel = configuration.pixelFormat == .bgr10a2 ? "ARGB2101010" : "NV12"
+        let formatLabel: String
+        switch activePixelFormat {
+        case .p010:
+            formatLabel = "P010"
+        case .bgr10a2:
+            formatLabel = "ARGB2101010"
+        case .bgra8:
+            formatLabel = "NV12"
+        }
         MirageLogger.encoder("Encoder input format: \(formatLabel)")
     }
 
@@ -132,7 +165,82 @@ actor HEVCEncoder {
         return QualitySettings(quality: clamped, minQP: clampedMin, maxQP: maxQP)
     }
 
+    private func loadSupportedProperties(_ session: VTCompressionSession) {
+        var propertyDictionary: CFDictionary?
+        let status = VTSessionCopySupportedPropertyDictionary(session, supportedPropertyDictionaryOut: &propertyDictionary)
+        didQuerySupportedProperties = (status == noErr)
+        guard status == noErr, let dict = propertyDictionary as? [CFString: Any] else {
+            supportedPropertyKeys = []
+            loggedUnsupportedKeys = []
+            MirageLogger.encoder("Encoder property support lookup failed: \(status)")
+            return
+        }
+        supportedPropertyKeys = Set(dict.keys)
+        loggedUnsupportedKeys = []
+    }
+
+    private func logHardwareStatus(_ session: VTCompressionSession) {
+        var hw: CFTypeRef?
+        let hwStatus = VTSessionCopyProperty(
+            session,
+            key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
+            allocator: kCFAllocatorDefault,
+            valueOut: &hw
+        )
+        if hwStatus == noErr, let value = hw, let boolValue = value as? Bool {
+            MirageLogger.encoder("Using hardware encoder: \(boolValue)")
+        } else {
+            MirageLogger.encoder("Using hardware encoder: (unknown, status \(hwStatus))")
+        }
+
+        var gpu: CFTypeRef?
+        let gpuStatus = VTSessionCopyProperty(
+            session,
+            key: kVTCompressionPropertyKey_UsingGPURegistryID,
+            allocator: kCFAllocatorDefault,
+            valueOut: &gpu
+        )
+        if gpuStatus == noErr, let value = gpu, let registry = value as? NSNumber {
+            MirageLogger.encoder("Encoder GPU registry ID: \(registry)")
+        } else if gpuStatus == noErr {
+            MirageLogger.encoder("Encoder GPU registry ID: nil (built-in encoder or software)")
+        }
+    }
+
+    private static func fourCCString(_ value: OSType) -> String {
+        let scalars: [UnicodeScalar] = [
+            UnicodeScalar((value >> 24) & 0xFF) ?? UnicodeScalar(32),
+            UnicodeScalar((value >> 16) & 0xFF) ?? UnicodeScalar(32),
+            UnicodeScalar((value >> 8) & 0xFF) ?? UnicodeScalar(32),
+            UnicodeScalar(value & 0xFF) ?? UnicodeScalar(32)
+        ]
+        return String(scalars.map { Character($0) })
+    }
+
+    private nonisolated func reserveEncoderSlot() -> Bool {
+        encoderInFlightLock.lock()
+        defer { encoderInFlightLock.unlock() }
+        guard encoderInFlightCount < encoderInFlightLimit else {
+            return false
+        }
+        encoderInFlightCount += 1
+        return true
+    }
+
+    private nonisolated func releaseEncoderSlot() {
+        encoderInFlightLock.lock()
+        encoderInFlightCount = max(0, encoderInFlightCount - 1)
+        encoderInFlightLock.unlock()
+    }
+
     private func setProperty(_ session: VTCompressionSession, key: CFString, value: CFTypeRef) {
+        if didQuerySupportedProperties, !supportedPropertyKeys.contains(key) {
+            if !loggedUnsupportedKeys.contains(key) {
+                loggedUnsupportedKeys.insert(key)
+                MirageLogger.encoder("Encoder property unsupported: \(key)")
+            }
+            return
+        }
         let status = VTSessionSetProperty(session, key: key, value: value)
         guard status == noErr else {
             MirageLogger.error(.encoder, "VTSessionSetProperty \(key) failed: \(status)")
@@ -160,6 +268,19 @@ actor HEVCEncoder {
         }
     }
 
+    private func applyBitrateSettings(_ session: VTCompressionSession) {
+        guard let targetBitrate = configuration.maxBitrate ?? configuration.minBitrate, targetBitrate > 0 else { return }
+        let windowSeconds: Double = configuration.targetFrameRate >= 120 ? 0.25 : 0.5
+        let bytesPerSecond = max(1, targetBitrate / 8)
+        setProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: NSNumber(value: targetBitrate))
+        let rateLimits: [NSNumber] = [NSNumber(value: bytesPerSecond), NSNumber(value: windowSeconds)]
+        setProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: rateLimits as CFArray)
+
+        let Mbps = Double(targetBitrate) / 1_000_000.0
+        let bitrateText = Mbps.formatted(.number.precision(.fractionLength(1)))
+        MirageLogger.encoder("Encoder bitrate target: \(bitrateText) Mbps")
+    }
+
     private func configureSession(_ session: VTCompressionSession) throws {
         // Real-time encoding
         setProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
@@ -184,6 +305,12 @@ actor HEVCEncoder {
             key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
             value: configuration.keyFrameInterval as CFNumber
         )
+        let intervalSeconds = max(1.0, Double(configuration.keyFrameInterval) / Double(max(1, configuration.targetFrameRate)))
+        setProperty(
+            session,
+            key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
+            value: intervalSeconds as CFNumber
+        )
 
         // Profile: Main10 for 10-bit, Main for 8-bit
         setProperty(
@@ -200,8 +327,12 @@ actor HEVCEncoder {
         )
         MirageLogger.encoder("Prioritizing encoding speed over quality")
 
-        // Apply quality setting - lower values reduce size for all frames
-        applyQualitySettings(session, quality: configuration.keyframeQuality, log: true)
+        // Apply base quality setting - lower values reduce size for all frames
+        baseQuality = configuration.frameQuality
+        applyQualitySettings(session, quality: baseQuality, log: true)
+
+        // Apply bitrate caps to keep encode time bounded for motion-heavy scenes
+        applyBitrateSettings(session)
 
         // Note: kVTCompressionPropertyKey_ConstantBitRate is not supported by all HEVC encoders
         // The encoder will use its default rate control mode (typically VBR), which is fine
@@ -270,9 +401,11 @@ actor HEVCEncoder {
 
         // Create a dummy pixel buffer at session dimensions
         var pixelBuffer: CVPixelBuffer?
+        let targetWidth = max(1, currentWidth)
+        let targetHeight = max(1, currentHeight)
         let status = CVPixelBufferCreate(
             kCFAllocatorDefault,
-            1920, 1080,  // Standard HD - actual content dimensions don't matter for warm-up
+            targetWidth, targetHeight,
             pixelFormatType,
             [
                 kCVPixelBufferMetalCompatibilityKey: true,
@@ -371,16 +504,43 @@ actor HEVCEncoder {
     }
 
     /// Encode a frame
-    func encodeFrame(_ wrapper: SampleBufferWrapper, forceKeyframe: Bool = false) async throws {
+    func encodeFrame(_ wrapper: SampleBufferWrapper, forceKeyframe: Bool = false) async throws -> Bool {
         let encodeStartTime = CFAbsoluteTimeGetCurrent()  // Timing: encode start
 
         // Drop frames during dimension update to prevent deadlock
-        guard !isUpdatingDimensions else { return }
-        guard isEncoding, let session = compressionSession else { return }
+        guard !isUpdatingDimensions else {
+            MirageLogger.encoder("Skipping encode: dimension update in progress")
+            return false
+        }
+        guard isEncoding else {
+            MirageLogger.encoder("Skipping encode: encoder not active")
+            return false
+        }
+        guard let session = compressionSession else {
+            MirageLogger.encoder("Skipping encode: no compression session")
+            return false
+        }
 
         let sampleBuffer = wrapper.buffer
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             throw MirageError.encodingError(NSError(domain: "MirageKit", code: -1, userInfo: [NSLocalizedDescriptionKey: "No pixel buffer"]))
+        }
+
+        let bufferPixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        if !didLogPixelFormat {
+            let bufferFourCC = Self.fourCCString(bufferPixelFormat)
+            let sessionFourCC = Self.fourCCString(pixelFormatType)
+            if bufferPixelFormat != pixelFormatType {
+                MirageLogger.error(.encoder, "Pixel format mismatch. Buffer=\(bufferFourCC) (\(bufferPixelFormat)) session=\(sessionFourCC) (\(pixelFormatType))")
+            } else {
+                MirageLogger.encoder("Pixel format match: \(bufferFourCC) (\(bufferPixelFormat))")
+            }
+            didLogPixelFormat = true
+        }
+
+        guard reserveEncoderSlot() else {
+            MirageLogger.encoder("Skipping encode: encoder queue full")
+            return false
         }
 
         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
@@ -419,9 +579,17 @@ actor HEVCEncoder {
             infoFlagsOut: nil
         ) { status, infoFlags, sampleBuffer in
             let info = Unmanaged<EncodeInfo>.fromOpaque(opaqueInfo).takeRetainedValue()
-            defer { info.completion?() }
+            defer {
+                self.releaseEncoderSlot()
+                info.completion?()
+            }
 
             guard status == noErr, let sampleBuffer else {
+                return
+            }
+
+            if infoFlags.contains(.frameDropped) {
+                MirageLogger.debug(.encoder, "VT dropped frame \(info.frameNumber)")
                 return
             }
 
@@ -484,15 +652,33 @@ actor HEVCEncoder {
         if status != noErr {
             Unmanaged<EncodeInfo>.fromOpaque(opaqueInfo).release()
             encodeInfo.completion?()
+            releaseEncoderSlot()
             throw MirageError.encodingError(NSError(domain: NSOSStatusErrorDomain, code: Int(status)))
         }
+        return true
     }
 
     /// Update quality dynamically (0.0 to 1.0)
     /// Lower quality reduces frame size during throughput pressure.
     func updateQuality(_ quality: Float) {
         guard let session = compressionSession else { return }
-        applyQualitySettings(session, quality: quality, log: false)
+        baseQuality = quality
+        guard !qualityOverrideActive else { return }
+        applyQualitySettings(session, quality: baseQuality, log: false)
+    }
+
+    func prepareForKeyframe(quality: Float) {
+        guard let session = compressionSession else { return }
+        let clamped = max(0.02, min(1.0, quality))
+        guard clamped < baseQuality else { return }
+        qualityOverrideActive = true
+        applyQualitySettings(session, quality: clamped, log: false)
+    }
+
+    func restoreBaseQualityIfNeeded() {
+        guard qualityOverrideActive, let session = compressionSession else { return }
+        qualityOverrideActive = false
+        applyQualitySettings(session, quality: baseQuality, log: false)
     }
 
     // No explicit bitrate caps; encoder quality and QP bounds define compression.
@@ -534,6 +720,10 @@ actor HEVCEncoder {
 
     func resetFrameNumber() {
         frameNumber = 0
+    }
+
+    func getActivePixelFormat() -> MiragePixelFormat {
+        activePixelFormat
     }
 
     /// Flush all pending frames from the encoder pipeline and force next keyframe.

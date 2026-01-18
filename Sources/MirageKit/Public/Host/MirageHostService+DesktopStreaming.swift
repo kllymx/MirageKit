@@ -48,11 +48,14 @@ extension MirageHostService {
         )
 
         // Find the virtual display in SCShareableContent
-        let scDisplay = try await findSCDisplayWithRetry(maxAttempts: 5, delayMs: 40)
+        let captureDisplay = try await findSCDisplayWithRetry(maxAttempts: 5, delayMs: 40)
+        let captureResolution = context.resolution
 
         guard let bounds = await SharedVirtualDisplayManager.shared.getDisplayBounds() else {
             throw MirageError.protocolError("Desktop stream display exists but couldn't get bounds")
         }
+        desktopDisplayBounds = bounds
+        desktopUsesVirtualDisplay = true
 
         // Set up display mirroring so main display mirrors virtual display
         // This makes the main display adopt the virtual display's resolution
@@ -66,12 +69,16 @@ extension MirageHostService {
         let presetFrameRate = targetFrameRate ?? 60
         let presetConfig = qualityPreset.encoderConfiguration(for: presetFrameRate)
         config.keyFrameInterval = presetConfig.keyFrameInterval
+        config.frameQuality = presetConfig.frameQuality
         config.keyframeQuality = presetConfig.keyframeQuality
         config.pixelFormat = presetConfig.pixelFormat
+        config.colorSpace = presetConfig.colorSpace
+        config.minBitrate = presetConfig.minBitrate
+        config.maxBitrate = presetConfig.maxBitrate
 
         config = config.withOverrides(
             keyFrameInterval: keyFrameInterval,
-            keyframeQuality: keyframeQuality
+            frameQuality: keyframeQuality
         )
 
         if let targetFrameRate {
@@ -97,7 +104,6 @@ extension MirageHostService {
         desktopStreamContext = streamContext
         desktopStreamID = streamID
         desktopStreamClientContext = clientContext
-        desktopDisplayBounds = bounds
         streamsByID[streamID] = streamContext
 
         // Register for input handling
@@ -119,8 +125,8 @@ extension MirageHostService {
 
         // Start streaming the display
         try await streamContext.startDesktopDisplay(
-            displayWrapper: scDisplay,
-            resolution: context.resolution,
+            displayWrapper: captureDisplay,
+            resolution: captureResolution,
             onEncodedFrame: { [weak self] packetData, _ in
                 guard let self else { return }
                 Task { @MainActor in
@@ -160,7 +166,7 @@ extension MirageHostService {
             await context.stop()
         }
 
-        if let displayID = await SharedVirtualDisplayManager.shared.getDisplayID() {
+        if desktopUsesVirtualDisplay, let displayID = await SharedVirtualDisplayManager.shared.getDisplayID() {
             await disableDisplayMirroring(displayID: displayID)
         }
 
@@ -174,11 +180,14 @@ extension MirageHostService {
         desktopStreamID = nil
         desktopStreamClientContext = nil
         desktopDisplayBounds = nil
+        desktopUsesVirtualDisplay = false
         streamsByID.removeValue(forKey: streamID)
         udpConnectionsByStream.removeValue(forKey: streamID)?.cancel()
         inputStreamCacheActor.remove(streamID)
 
-        await SharedVirtualDisplayManager.shared.releaseDisplayForConsumer(.desktopStream)
+        if desktopUsesVirtualDisplay {
+            await SharedVirtualDisplayManager.shared.releaseDisplayForConsumer(.desktopStream)
+        }
 
         if activeStreams.isEmpty && loginDisplayContext == nil {
             await PowerAssertionManager.shared.disable()

@@ -883,7 +883,7 @@ public final class MirageClientService {
     ///     If provided, host creates a virtual display at this resolution for optimal quality.
     ///   - keyFrameInterval: Optional keyframe interval in frames. Higher = fewer lag spikes.
     ///     Examples: 600 (10 seconds @ 60fps), 300 (5 seconds @ 60fps)
-    ///   - keyframeQuality: Optional encoder quality (0.0-1.0). Lower = smaller frames.
+    ///   - keyframeQuality: Optional frame quality (0.0-1.0). Lower = smaller frames.
     public func startViewing(
         window: MirageWindow,
         quality: MirageQualityPreset = .medium,
@@ -925,7 +925,7 @@ public final class MirageClientService {
         }
         if let keyframeQuality, keyframeQuality > 0 {
             request.keyframeQuality = keyframeQuality
-            MirageLogger.client("Requesting encoder quality: \(keyframeQuality)")
+            MirageLogger.client("Requesting frame quality: \(keyframeQuality)")
         }
 
         request.streamScale = clampedStreamScale()
