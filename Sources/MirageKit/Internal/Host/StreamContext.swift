@@ -123,7 +123,7 @@ actor StreamContext {
 
     /// Keyframe request throttling
     private let keyframeRequestCooldown: CFAbsoluteTime = 0.25
-    private let keyframeInFlightCap: CFAbsoluteTime = 0.75
+    private let keyframeInFlightCap: CFAbsoluteTime = 3.0
     private let keyframeSettleTimeout: CFAbsoluteTime = 2.0
     private let keyframeQueueSettleFactor: Double = 0.4
     private var lastKeyframeRequestTime: CFAbsoluteTime = 0

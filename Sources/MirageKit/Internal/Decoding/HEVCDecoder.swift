@@ -959,8 +959,8 @@ private final class DecodeErrorTracker: @unchecked Sendable {
     private var totalErrors: UInt64 = 0
 
     /// Minimum time between keyframe requests (seconds)
-    /// 1.0s prevents keyframe request flooding during transient packet loss
-    private let retryInterval: CFAbsoluteTime = 1.0
+    /// Keeps retries aligned with keyframe assembly timeouts
+    private let retryInterval: CFAbsoluteTime = 3.0
 
     /// Number of errors to accumulate before retrying after initial request
     /// 10 errors balances fast retry with avoiding excessive keyframe requests
@@ -1143,7 +1143,9 @@ actor FrameReassembler {
     private var lastDeliveredKeyframe: UInt32 = 0
     private var droppedFrameCount: UInt64 = 0
     private var awaitingKeyframe: Bool = false
+    private var awaitingKeyframeSince: CFAbsoluteTime = 0
     private var currentEpoch: UInt16 = 0
+    private let keyframeTimeout: TimeInterval = 3.0
 
     /// Expected dimension token - frames with mismatched tokens are silently discarded.
     /// Updated when stream starts or client receives a resize notification.
@@ -1211,7 +1213,7 @@ actor FrameReassembler {
                 resetForEpoch(header.epoch, reason: "epoch mismatch")
             } else {
                 packetsDiscardedEpoch += 1
-                awaitingKeyframe = true
+                beginAwaitingKeyframe()
                 return
             }
         }
@@ -1221,7 +1223,7 @@ actor FrameReassembler {
                 resetForEpoch(header.epoch, reason: "discontinuity")
             } else {
                 packetsDiscardedEpoch += 1
-                awaitingKeyframe = true
+                beginAwaitingKeyframe()
                 return
             }
         }
@@ -1351,7 +1353,7 @@ actor FrameReassembler {
             framesDelivered += 1
             if frame.isKeyframe {
                 MirageLogger.log(.frameAssembly, "Delivering keyframe \(frameNumber) (\(completeData.count) bytes)")
-                awaitingKeyframe = false
+                clearAwaitingKeyframe()
             }
             onFrameComplete?(streamID, completeData, frame.isKeyframe, frame.timestamp, frame.contentRect)
         } else {
@@ -1396,7 +1398,7 @@ actor FrameReassembler {
         pendingFrames.removeAll()
         lastCompletedFrame = 0
         lastDeliveredKeyframe = 0
-        awaitingKeyframe = false
+        clearAwaitingKeyframe()
         packetsDiscardedAwaitingKeyframe = 0
         MirageLogger.log(.frameAssembly, "Epoch \(epoch) reset (\(reason)) for stream \(streamID)")
     }
@@ -1405,9 +1407,8 @@ actor FrameReassembler {
         let now = Date()
         // P-frame timeout: 500ms - allows time for UDP packet jitter without dropping frames
         let pFrameTimeout: TimeInterval = 0.5
-        // Keyframe timeout: 3s - keyframes are 600-900 packets and critical for recovery
+        // Keyframes are 600-900 packets and critical for recovery
         // They need much more time to complete than small P-frames
-        let keyframeTimeout: TimeInterval = 3.0
 
         var timedOutCount: UInt64 = 0
         pendingFrames = pendingFrames.filter { frameNumber, frame in
@@ -1443,7 +1444,7 @@ actor FrameReassembler {
         lastCompletedFrame = 0
         lastDeliveredKeyframe = 0
         droppedFrameCount = 0
-        awaitingKeyframe = false
+        clearAwaitingKeyframe()
         packetsDiscardedAwaitingKeyframe = 0
         currentEpoch = 0
         packetsDiscardedEpoch = 0
@@ -1451,8 +1452,29 @@ actor FrameReassembler {
 
     /// Enter keyframe-only mode after decoder errors until a keyframe arrives.
     func enterKeyframeOnlyMode() {
-        awaitingKeyframe = true
+        beginAwaitingKeyframe()
         pendingFrames = pendingFrames.filter { $0.value.isKeyframe }
         MirageLogger.log(.frameAssembly, "Entering keyframe-only mode for stream \(streamID)")
+    }
+
+    func awaitingKeyframeDuration(now: CFAbsoluteTime) -> CFAbsoluteTime? {
+        guard awaitingKeyframe, awaitingKeyframeSince > 0 else { return nil }
+        return now - awaitingKeyframeSince
+    }
+
+    func keyframeTimeoutSeconds() -> CFAbsoluteTime {
+        keyframeTimeout
+    }
+
+    private func beginAwaitingKeyframe() {
+        if !awaitingKeyframe || awaitingKeyframeSince == 0 {
+            awaitingKeyframe = true
+            awaitingKeyframeSince = CFAbsoluteTimeGetCurrent()
+        }
+    }
+
+    private func clearAwaitingKeyframe() {
+        awaitingKeyframe = false
+        awaitingKeyframeSince = 0
     }
 }

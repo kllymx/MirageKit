@@ -72,8 +72,15 @@ actor StreamController {
     /// Timeout for resize confirmation
     private static let resizeTimeout: Duration = .seconds(2)
 
+    /// Interval for retrying keyframe requests while decoder is unhealthy
+    private static let keyframeRecoveryInterval: Duration = .seconds(1)
+
     /// Pending resize debounce task
     private var resizeDebounceTask: Task<Void, Never>?
+
+    /// Task that periodically requests keyframes during decoder recovery
+    private var keyframeRecoveryTask: Task<Void, Never>?
+    private var lastRecoveryRequestTime: CFAbsoluteTime = 0
 
     /// Whether we've received at least one frame
     private var hasReceivedFirstFrame = false
@@ -257,6 +264,8 @@ actor StreamController {
 
         resizeDebounceTask?.cancel()
         resizeDebounceTask = nil
+        keyframeRecoveryTask?.cancel()
+        keyframeRecoveryTask = nil
         frameStorage.clear()
         MirageFrameCache.shared.clear(for: streamID)
     }
@@ -419,9 +428,51 @@ actor StreamController {
         guard self.isInputBlocked != isBlocked else { return }
         self.isInputBlocked = isBlocked
         MirageLogger.client("Input blocking state changed: \(isBlocked ? "BLOCKED" : "allowed") for stream \(streamID)")
+        if isBlocked {
+            startKeyframeRecoveryLoop()
+        } else {
+            stopKeyframeRecoveryLoop()
+        }
         Task { @MainActor [weak self] in
             await self?.onInputBlockingChanged?(isBlocked)
         }
+    }
+
+    private func startKeyframeRecoveryLoop() {
+        guard keyframeRecoveryTask == nil else { return }
+        keyframeRecoveryTask = Task { [weak self] in
+            await self?.runKeyframeRecoveryLoop()
+        }
+    }
+
+    private func stopKeyframeRecoveryLoop() {
+        keyframeRecoveryTask?.cancel()
+        keyframeRecoveryTask = nil
+        lastRecoveryRequestTime = 0
+    }
+
+    private func runKeyframeRecoveryLoop() async {
+        while isInputBlocked && !Task.isCancelled {
+            do {
+                try await Task.sleep(for: Self.keyframeRecoveryInterval)
+            } catch {
+                break
+            }
+            guard isInputBlocked && !Task.isCancelled else { break }
+            let now = CFAbsoluteTimeGetCurrent()
+            guard let awaitingDuration = await reassembler.awaitingKeyframeDuration(now: now) else { continue }
+            let timeout = await reassembler.keyframeTimeoutSeconds()
+            guard awaitingDuration >= timeout else { continue }
+            if lastRecoveryRequestTime > 0, now - lastRecoveryRequestTime < timeout {
+                continue
+            }
+            guard let handler = onKeyframeNeeded else { break }
+            lastRecoveryRequestTime = now
+            await MainActor.run {
+                handler()
+            }
+        }
+        keyframeRecoveryTask = nil
     }
 
     private func setResizeState(_ newState: ResizeState) async {

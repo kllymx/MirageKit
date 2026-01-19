@@ -860,18 +860,26 @@ public class InputCapturingView: UIView {
         sendModifierStateIfNeeded(force: true)
     }
 
-    /// Clear all held modifiers with explicit keyUp events
-    /// This ensures host receives proper release events, not just flagsChanged
-    private func resetAllModifiers() {
-        for keyCode in heldModifierKeys {
-            let macKeyCode = Self.hidToMacKeyCode(keyCode)
-            let keyEvent = MirageKeyEvent(
-                keyCode: macKeyCode,
-                modifiers: keyboardModifiers
-            )
-            onInputEvent?(.keyUp(keyEvent))
+    private func resyncModifierState(from modifierFlags: UIKeyModifierFlags) {
+        let flags = MirageModifierFlags(uiKeyModifierFlags: modifierFlags)
+        var newHeldKeys = Set<UIKeyboardHIDUsage>()
+        for (flag, keyCode) in Self.modifierFlagToKey where flags.contains(flag) {
+            newHeldKeys.insert(keyCode)
         }
+
+        let newCapsLockEnabled = flags.contains(.capsLock)
+
+        guard newHeldKeys != heldModifierKeys || newCapsLockEnabled != capsLockEnabled else { return }
+        heldModifierKeys = newHeldKeys
+        capsLockEnabled = newCapsLockEnabled
+        sendModifierStateIfNeeded(force: true)
+    }
+
+    /// Clear all held modifiers with a snapshot update
+    private func resetAllModifiers() {
+        guard !heldModifierKeys.isEmpty || capsLockEnabled else { return }
         heldModifierKeys.removeAll()
+        capsLockEnabled = false
         sendModifierStateIfNeeded(force: true)
     }
 
@@ -912,22 +920,14 @@ public class InputCapturingView: UIView {
         .keyboardCapsLock: .capsLock
     ]
 
-    /// Convert iOS HID usage code to macOS virtual key code for modifier keys
-    /// Used by resetAllModifiers() to generate proper keyUp events
-    private static func hidToMacKeyCode(_ hidCode: UIKeyboardHIDUsage) -> UInt16 {
-        switch hidCode {
-        case .keyboardLeftShift: return 0x38
-        case .keyboardRightShift: return 0x3C
-        case .keyboardLeftControl: return 0x3B
-        case .keyboardRightControl: return 0x3E
-        case .keyboardLeftAlt: return 0x3A      // Left Option
-        case .keyboardRightAlt: return 0x3D     // Right Option
-        case .keyboardLeftGUI: return 0x37      // Left Command
-        case .keyboardRightGUI: return 0x36     // Right Command
-        case .keyboardCapsLock: return 0x39
-        default: return UInt16(hidCode.rawValue)
-        }
-    }
+    /// Canonical key codes for modifier flag resync
+    private static let modifierFlagToKey: [(flag: MirageModifierFlags, keyCode: UIKeyboardHIDUsage)] = [
+        (.shift, .keyboardLeftShift),
+        (.control, .keyboardLeftControl),
+        (.option, .keyboardLeftAlt),
+        (.command, .keyboardLeftGUI)
+    ]
+
 
     // Key repeat handling
     /// Active key repeat timers keyed by HID usage code
@@ -1172,6 +1172,7 @@ public class InputCapturingView: UIView {
     /// Get combined modifiers from a gesture (at event time) and keyboard state
     /// This is the proper way to get modifiers for pointer events - read from gesture directly
     private func modifiers(from gesture: UIGestureRecognizer) -> MirageModifierFlags {
+        resyncModifierState(from: gesture.modifierFlags)
         let gestureModifiers = MirageModifierFlags(uiKeyModifierFlags: gesture.modifierFlags)
         return gestureModifiers.union(keyboardModifiers)
     }
@@ -1373,9 +1374,6 @@ public class InputCapturingView: UIView {
             let isCapsLockKey = key.keyCode == .keyboardCapsLock
 
             if isCapsLockKey {
-                if let keyEvent = MirageKeyEvent(press: press, modifiers: keyboardModifiers) {
-                    onInputEvent?(.keyDown(keyEvent))
-                }
                 capsLockEnabled.toggle()
                 sendModifierStateIfNeeded(force: true)
                 continue
@@ -1385,16 +1383,10 @@ public class InputCapturingView: UIView {
             let isModifier = Self.modifierKeyMap[key.keyCode] != nil
 
             if isModifier {
-                // For modifier keys: send keyDown FIRST (before updating held set)
-                // This ensures the modifier key press doesn't include its own modifier bit
-                if let keyEvent = MirageKeyEvent(press: press, modifiers: keyboardModifiers) {
-                    onInputEvent?(.keyDown(keyEvent))
-                }
-                // NOW add to held set and send flagsChanged
                 heldModifierKeys.insert(key.keyCode)
                 sendModifierStateIfNeeded(force: true)
             } else {
-                // For non-modifier keys: start key repeat timer and send keyDown with current modifiers
+                resyncModifierState(from: key.modifierFlags)
                 startKeyRepeat(for: press)
                 if let keyEvent = MirageKeyEvent(press: press, modifiers: keyboardModifiers) {
                     onInputEvent?(.keyDown(keyEvent))
@@ -1410,26 +1402,17 @@ public class InputCapturingView: UIView {
             let isCapsLockKey = key.keyCode == .keyboardCapsLock
 
             if isCapsLockKey {
-                if let keyEvent = MirageKeyEvent(press: press, modifiers: keyboardModifiers) {
-                    onInputEvent?(.keyUp(keyEvent))
-                }
                 continue
             }
 
             let isModifier = Self.modifierKeyMap[key.keyCode] != nil
 
             if isModifier {
-                // For modifier keys: send keyUp FIRST (while modifier still in held set)
-                // This ensures the release event includes the modifier being released
-                if let keyEvent = MirageKeyEvent(press: press, modifiers: keyboardModifiers) {
-                    onInputEvent?(.keyUp(keyEvent))
-                }
-                // NOW remove from held set and send flagsChanged
                 heldModifierKeys.remove(key.keyCode)
                 sendModifierStateIfNeeded(force: true)
             } else {
-                // For non-modifier keys: stop key repeat and send keyUp
                 stopKeyRepeat(for: key.keyCode)
+                resyncModifierState(from: key.modifierFlags)
                 if let keyEvent = MirageKeyEvent(press: press, modifiers: keyboardModifiers) {
                     onInputEvent?(.keyUp(keyEvent))
                 }
@@ -1443,25 +1426,17 @@ public class InputCapturingView: UIView {
             let isCapsLockKey = key.keyCode == .keyboardCapsLock
 
             if isCapsLockKey {
-                if let keyEvent = MirageKeyEvent(press: press, modifiers: keyboardModifiers) {
-                    onInputEvent?(.keyUp(keyEvent))
-                }
                 continue
             }
 
             let isModifier = Self.modifierKeyMap[key.keyCode] != nil
 
             if isModifier {
-                // For modifier keys: send keyUp FIRST (while modifier still in held set)
-                if let keyEvent = MirageKeyEvent(press: press, modifiers: keyboardModifiers) {
-                    onInputEvent?(.keyUp(keyEvent))
-                }
-                // NOW remove from held set and send flagsChanged
                 heldModifierKeys.remove(key.keyCode)
                 sendModifierStateIfNeeded(force: true)
             } else {
-                // For non-modifier keys: stop key repeat and send keyUp
                 stopKeyRepeat(for: key.keyCode)
+                resyncModifierState(from: key.modifierFlags)
                 if let keyEvent = MirageKeyEvent(press: press, modifiers: keyboardModifiers) {
                     onInputEvent?(.keyUp(keyEvent))
                 }
@@ -1573,6 +1548,7 @@ public class InputCapturingView: UIView {
 
         // Build modifiers from the command's modifier flags merged with our tracked keyboard state
         // This handles cases like CMD+Shift+Z where Shift is part of the command
+        resyncModifierState(from: command.modifierFlags)
         var eventModifiers = keyboardModifiers
         if command.modifierFlags.contains(.shift) { eventModifiers.insert(.shift) }
         if command.modifierFlags.contains(.control) { eventModifiers.insert(.control) }
