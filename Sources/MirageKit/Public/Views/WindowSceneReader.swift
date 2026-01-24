@@ -135,21 +135,15 @@ public struct ScreenReaderModifier: ViewModifier {
                         MirageLogger.debug(.client, "WindowSceneReader: windowScene is nil")
                     }
                     let screenFromScene = windowScene?.screen
-                    let screen = screenFromScene ?? MirageClientService.currentWindowScreen()
+                    let screen = screenFromScene ?? UIScreen.main
                     if windowScene != nil && screenFromScene == nil {
                         MirageLogger.debug(.client, "WindowSceneReader: windowScene exists but screen is nil")
                     }
                     if screen !== currentScreen {
-                        if let screen {
-                            MirageLogger.debug(.client, "WindowSceneReader: screen changed to \(screen.bounds)")
-                        } else {
-                            MirageLogger.debug(.client, "WindowSceneReader: screen became nil")
-                        }
+                        MirageLogger.debug(.client, "WindowSceneReader: screen changed to \(screen.bounds)")
                         Task { @MainActor in
                             currentScreen = screen
-                            if let screen {
-                                onScreenChange?(screen)
-                            }
+                            onScreenChange?(screen)
                         }
                     }
                 }

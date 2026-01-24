@@ -99,7 +99,7 @@ struct StreamView: View {
             onInputEvent: { event in
                 // Forward event to MirageClientService
             },
-            onDrawableSizeChanged: { size in
+            onDrawableMetricsChanged: { metrics in
                 // Use to request updated capture resolution
             }
         )

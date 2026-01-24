@@ -35,8 +35,13 @@ extension InputCapturingView {
         pointerInteraction?.invalidate()
     }
 
-    func refreshCursorIfNeeded() {
+    func refreshCursorIfNeeded(force: Bool = false) {
         guard let cursorStore, let streamID else { return }
+        let now = CACurrentMediaTime()
+        if !force, now - lastCursorRefreshTime < cursorRefreshInterval {
+            return
+        }
+        lastCursorRefreshTime = now
         guard let snapshot = cursorStore.snapshot(for: streamID) else { return }
         guard snapshot.sequence != cursorSequence else { return }
         cursorSequence = snapshot.sequence

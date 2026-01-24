@@ -14,21 +14,24 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
     /// Callback for sending input events to the host
     public var onInputEvent: ((MirageInputEvent) -> Void)?
 
-    /// Callback when drawable size changes - reports actual pixel dimensions
-    public var onDrawableSizeChanged: ((CGSize) -> Void)?
+    /// Callback when drawable metrics change - reports pixel size and scale factor
+    public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
 
     public init(
         streamID: StreamID,
         onInputEvent: ((MirageInputEvent) -> Void)? = nil,
-        onDrawableSizeChanged: ((CGSize) -> Void)? = nil
+        onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)? = nil
     ) {
         self.streamID = streamID
         self.onInputEvent = onInputEvent
-        self.onDrawableSizeChanged = onDrawableSizeChanged
+        self.onDrawableMetricsChanged = onDrawableMetricsChanged
     }
 
     public func makeCoordinator() -> MirageStreamViewCoordinator {
-        MirageStreamViewCoordinator(onInputEvent: onInputEvent, onDrawableSizeChanged: onDrawableSizeChanged)
+        MirageStreamViewCoordinator(
+            onInputEvent: onInputEvent,
+            onDrawableMetricsChanged: onDrawableMetricsChanged
+        )
     }
 
     public func makeNSView(context: Context) -> NSView {
@@ -48,7 +51,7 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
 
         // Store Metal view reference in coordinator
         context.coordinator.metalView = metalView
-        metalView.onDrawableSizeChanged = context.coordinator.handleDrawableSizeChanged
+        metalView.onDrawableMetricsChanged = context.coordinator.handleDrawableMetricsChanged
         metalView.streamID = streamID
 
         // Configure scroll callback for native trackpad physics
@@ -74,7 +77,7 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.onDrawableSizeChanged = onDrawableSizeChanged
+        context.coordinator.onDrawableMetricsChanged = onDrawableMetricsChanged
         context.coordinator.onInputEvent = onInputEvent
 
         if let metalView = context.coordinator.metalView {

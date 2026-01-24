@@ -21,26 +21,33 @@ final class MirageMetalRenderState {
         lastRenderedSequence = 0
         needsRedraw = true
         lastPixelBuffer = nil
+        currentTexture = nil
+        currentContentRect = .zero
     }
 
     func markNeedsRedraw() {
         needsRedraw = true
     }
 
-    func updateFrameIfNeeded(streamID: StreamID?, renderer: MetalRenderer?) {
-        guard let id = streamID, let entry = MirageFrameCache.shared.getEntry(for: id) else { return }
-        if entry.sequence == lastRenderedSequence && !needsRedraw {
-            return
+    @discardableResult
+    func updateFrameIfNeeded(streamID: StreamID?, renderer: MetalRenderer?) -> Bool {
+        guard let id = streamID, let entry = MirageFrameCache.shared.getEntry(for: id) else { return false }
+        let hasNewFrame = entry.sequence != lastRenderedSequence
+        guard hasNewFrame || needsRedraw else { return false }
+
+        if let texture = entry.texture {
+            currentTexture = texture
+            lastPixelBuffer = entry.pixelBuffer
+        } else if hasNewFrame || currentTexture == nil || entry.pixelBuffer !== lastPixelBuffer {
+            currentTexture = renderer?.createTexture(from: entry.pixelBuffer)
+            lastPixelBuffer = entry.pixelBuffer
         }
 
-        let pixelBuffer = entry.pixelBuffer
-        if pixelBuffer !== lastPixelBuffer {
-            currentTexture = renderer?.createTexture(from: pixelBuffer)
-            lastPixelBuffer = pixelBuffer
-        }
+        guard currentTexture != nil else { return false }
 
         currentContentRect = entry.contentRect
         lastRenderedSequence = entry.sequence
         needsRedraw = false
+        return true
     }
 }

@@ -28,10 +28,10 @@ public class InputCapturingView: UIView {
         }
     }
 
-    /// Callback when drawable size changes - reports actual pixel dimensions
-    public var onDrawableSizeChanged: ((CGSize) -> Void)? {
+    /// Callback when drawable metrics change - reports pixel size and scale factor
+    public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)? {
         didSet {
-            metalView.onDrawableSizeChanged = onDrawableSizeChanged
+            metalView.onDrawableMetricsChanged = onDrawableMetricsChanged
         }
     }
 
@@ -41,7 +41,7 @@ public class InputCapturingView: UIView {
         didSet {
             metalView.streamID = streamID
             cursorSequence = 0
-            refreshCursorIfNeeded()
+            refreshCursorIfNeeded(force: true)
         }
     }
 
@@ -49,7 +49,7 @@ public class InputCapturingView: UIView {
     public var cursorStore: MirageClientCursorStore? {
         didSet {
             cursorSequence = 0
-            refreshCursorIfNeeded()
+            refreshCursorIfNeeded(force: true)
         }
     }
 
@@ -65,6 +65,8 @@ public class InputCapturingView: UIView {
     var cursorIsVisible: Bool = true
     var pointerInteraction: UIPointerInteraction?
     var cursorSequence: UInt64 = 0
+    var lastCursorRefreshTime: CFTimeInterval = 0
+    let cursorRefreshInterval: CFTimeInterval = 1.0 / 30.0
 
     // Gesture recognizers
     var tapGesture: UITapGestureRecognizer!

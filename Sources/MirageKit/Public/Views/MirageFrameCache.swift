@@ -7,6 +7,7 @@
 
 import Foundation
 import CoreVideo
+import Metal
 
 // MARK: - Global Frame Cache (iOS Gesture Tracking Support)
 
@@ -21,6 +22,8 @@ public final class MirageFrameCache: @unchecked Sendable {
         let pixelBuffer: CVPixelBuffer
         let contentRect: CGRect
         let sequence: UInt64
+        let metalTexture: CVMetalTexture?
+        let texture: MTLTexture?
     }
 
     /// Shared instance - use this from both decode callbacks and Metal views
@@ -32,15 +35,28 @@ public final class MirageFrameCache: @unchecked Sendable {
     private init() {}
 
     /// Store a frame for a stream (called from decode callback)
-    public func store(_ pixelBuffer: CVPixelBuffer, contentRect: CGRect, for streamID: StreamID) {
+    public func store(
+        _ pixelBuffer: CVPixelBuffer,
+        contentRect: CGRect,
+        metalTexture: CVMetalTexture?,
+        texture: MTLTexture?,
+        for streamID: StreamID
+    ) {
         lock.lock()
         let nextSequence = (frames[streamID]?.sequence ?? 0) &+ 1
         frames[streamID] = FrameEntry(
             pixelBuffer: pixelBuffer,
             contentRect: contentRect,
-            sequence: nextSequence
+            sequence: nextSequence,
+            metalTexture: metalTexture,
+            texture: texture
         )
         lock.unlock()
+    }
+
+    /// Store a frame for a stream without a prebuilt Metal texture.
+    public func store(_ pixelBuffer: CVPixelBuffer, contentRect: CGRect, for streamID: StreamID) {
+        store(pixelBuffer, contentRect: contentRect, metalTexture: nil, texture: nil, for: streamID)
     }
 
     func getEntry(for streamID: StreamID) -> FrameEntry? {

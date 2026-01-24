@@ -28,8 +28,8 @@ public class MirageMetalView: MTKView {
         }
     }
 
-    /// Callback when drawable size changes - reports actual pixel dimensions
-    public var onDrawableSizeChanged: ((CGSize) -> Void)?
+    /// Callback when drawable metrics change - reports pixel size and scale factor
+    public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
 
     /// Last reported drawable size to avoid redundant callbacks
     private var lastReportedDrawableSize: CGSize = .zero
@@ -70,7 +70,7 @@ public class MirageMetalView: MTKView {
 
     public override func layout() {
         super.layout()
-        reportDrawableSizeIfChanged()
+        reportDrawableMetricsIfChanged()
     }
 
     deinit {
@@ -78,19 +78,28 @@ public class MirageMetalView: MTKView {
     }
 
     /// Report actual drawable pixel size to ensure host captures at correct resolution
-    private func reportDrawableSizeIfChanged() {
+    private func reportDrawableMetricsIfChanged() {
         let drawableSize = self.drawableSize
         if drawableSize != lastReportedDrawableSize && drawableSize.width > 0 && drawableSize.height > 0 {
             lastReportedDrawableSize = drawableSize
             renderState.markNeedsRedraw()
             MirageLogger.renderer("Drawable size: \(drawableSize.width)x\(drawableSize.height) px (bounds: \(bounds.size))")
-            onDrawableSizeChanged?(drawableSize)
+            onDrawableMetricsChanged?(currentDrawableMetrics(drawableSize: drawableSize))
         }
+    }
+
+    private func currentDrawableMetrics(drawableSize: CGSize) -> MirageDrawableMetrics {
+        let scale = window?.backingScaleFactor ?? 2.0
+        return MirageDrawableMetrics(
+            pixelSize: drawableSize,
+            viewSize: bounds.size,
+            scaleFactor: scale
+        )
     }
 
     public override func draw(_ rect: CGRect) {
         // Pull-based frame update to avoid MainActor stalls during menu tracking/dragging.
-        renderState.updateFrameIfNeeded(streamID: streamID, renderer: renderer)
+        guard renderState.updateFrameIfNeeded(streamID: streamID, renderer: renderer) else { return }
 
         guard let drawable = currentDrawable,
               let texture = renderState.currentTexture else { return }

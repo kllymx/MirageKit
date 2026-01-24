@@ -16,8 +16,8 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
     /// Callback for sending input events to the host
     public var onInputEvent: ((MirageInputEvent) -> Void)?
 
-    /// Callback when drawable size changes - reports actual pixel dimensions
-    public var onDrawableSizeChanged: ((CGSize) -> Void)?
+    /// Callback when drawable metrics change - reports actual pixel dimensions and scale
+    public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
 
     /// Cursor store for pointer updates (decoupled from SwiftUI observation).
     public var cursorStore: MirageClientCursorStore?
@@ -32,14 +32,14 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
     public init(
         streamID: StreamID,
         onInputEvent: ((MirageInputEvent) -> Void)? = nil,
-        onDrawableSizeChanged: ((CGSize) -> Void)? = nil,
+        onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)? = nil,
         cursorStore: MirageClientCursorStore? = nil,
         onBecomeActive: (() -> Void)? = nil,
         dockSnapEnabled: Bool = false
     ) {
         self.streamID = streamID
         self.onInputEvent = onInputEvent
-        self.onDrawableSizeChanged = onDrawableSizeChanged
+        self.onDrawableMetricsChanged = onDrawableMetricsChanged
         self.cursorStore = cursorStore
         self.onBecomeActive = onBecomeActive
         self.dockSnapEnabled = dockSnapEnabled
@@ -48,7 +48,7 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
     public func makeCoordinator() -> MirageStreamViewCoordinator {
         MirageStreamViewCoordinator(
             onInputEvent: onInputEvent,
-            onDrawableSizeChanged: onDrawableSizeChanged,
+            onDrawableMetricsChanged: onDrawableMetricsChanged,
             onBecomeActive: onBecomeActive
         )
     }
@@ -56,7 +56,7 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
     public func makeUIView(context: Context) -> InputCapturingView {
         let view = InputCapturingView(frame: .zero)
         view.onInputEvent = context.coordinator.handleInputEvent
-        view.onDrawableSizeChanged = context.coordinator.handleDrawableSizeChanged
+        view.onDrawableMetricsChanged = context.coordinator.handleDrawableMetricsChanged
         view.onBecomeActive = context.coordinator.handleBecomeActive
         view.dockSnapEnabled = dockSnapEnabled
         view.cursorStore = cursorStore
@@ -68,7 +68,7 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
     public func updateUIView(_ uiView: InputCapturingView, context: Context) {
         // Update coordinator's callbacks in case they changed
         context.coordinator.onInputEvent = onInputEvent
-        context.coordinator.onDrawableSizeChanged = onDrawableSizeChanged
+        context.coordinator.onDrawableMetricsChanged = onDrawableMetricsChanged
         context.coordinator.onBecomeActive = onBecomeActive
 
         // Update stream ID for direct frame cache access
@@ -77,6 +77,7 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
 
         uiView.dockSnapEnabled = dockSnapEnabled
         uiView.cursorStore = cursorStore
+        uiView.onDrawableMetricsChanged = context.coordinator.handleDrawableMetricsChanged
     }
 }
 #endif

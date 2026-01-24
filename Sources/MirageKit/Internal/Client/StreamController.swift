@@ -8,6 +8,7 @@
 import Foundation
 import CoreMedia
 import CoreVideo
+import Metal
 
 /// Controls the lifecycle and state of a single stream.
 /// Owned by MirageClientService, not by views. This ensures:
@@ -57,6 +58,8 @@ actor StreamController {
 
     /// Frame reassembler for this stream
     private let reassembler: FrameReassembler
+
+    private let textureCache = StreamTextureCache()
 
     /// Current resize state
     private(set) var resizeState: ResizeState = .idle
@@ -200,7 +203,14 @@ actor StreamController {
             guard let self else { return }
 
             // Also store in global cache for iOS gesture tracking compatibility
-            MirageFrameCache.shared.store(pixelBuffer, contentRect: contentRect, for: capturedStreamID)
+            let (metalTexture, texture) = self.textureCache.makeTexture(from: pixelBuffer)
+            MirageFrameCache.shared.store(
+                pixelBuffer,
+                contentRect: contentRect,
+                metalTexture: metalTexture,
+                texture: texture,
+                for: capturedStreamID
+            )
 
             // Mark that we've received a frame and notify delegate
             Task { [weak self] in
@@ -587,5 +597,60 @@ actor StreamController {
         } catch {
             // Cancelled, ignore
         }
+    }
+}
+
+private final class StreamTextureCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private let device: MTLDevice?
+    private var cache: CVMetalTextureCache?
+
+    init() {
+        device = MTLCreateSystemDefaultDevice()
+        guard let device else { return }
+        var createdCache: CVMetalTextureCache?
+        let status = CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &createdCache)
+        if status == kCVReturnSuccess {
+            cache = createdCache
+        }
+    }
+
+    func makeTexture(from pixelBuffer: CVPixelBuffer) -> (CVMetalTexture?, MTLTexture?) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let cache else { return (nil, nil) }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let pixelFormatType = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        let metalPixelFormat: MTLPixelFormat
+        switch pixelFormatType {
+        case kCVPixelFormatType_32BGRA:
+            metalPixelFormat = .bgra8Unorm
+        case kCVPixelFormatType_ARGB2101010LEPacked:
+            metalPixelFormat = .bgr10a2Unorm
+        default:
+            metalPixelFormat = .bgr10a2Unorm
+        }
+
+        var metalTexture: CVMetalTexture?
+        let status = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault,
+            cache,
+            pixelBuffer,
+            nil,
+            metalPixelFormat,
+            width,
+            height,
+            0,
+            &metalTexture
+        )
+
+        guard status == kCVReturnSuccess, let metalTexture else {
+            return (nil, nil)
+        }
+
+        return (metalTexture, CVMetalTextureGetTexture(metalTexture))
     }
 }

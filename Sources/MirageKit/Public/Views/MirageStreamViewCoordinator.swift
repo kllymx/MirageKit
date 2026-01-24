@@ -10,17 +10,17 @@ import Foundation
 
 public final class MirageStreamViewCoordinator {
     var onInputEvent: ((MirageInputEvent) -> Void)?
-    var onDrawableSizeChanged: ((CGSize) -> Void)?
+    var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
     var onBecomeActive: (() -> Void)?
     weak var metalView: MirageMetalView?
 
     init(
         onInputEvent: ((MirageInputEvent) -> Void)?,
-        onDrawableSizeChanged: ((CGSize) -> Void)?,
+        onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?,
         onBecomeActive: (() -> Void)? = nil
     ) {
         self.onInputEvent = onInputEvent
-        self.onDrawableSizeChanged = onDrawableSizeChanged
+        self.onDrawableMetricsChanged = onDrawableMetricsChanged
         self.onBecomeActive = onBecomeActive
     }
 
@@ -28,8 +28,8 @@ public final class MirageStreamViewCoordinator {
         onInputEvent?(event)
     }
 
-    func handleDrawableSizeChanged(_ size: CGSize) {
-        onDrawableSizeChanged?(size)
+    func handleDrawableMetricsChanged(_ metrics: MirageDrawableMetrics) {
+        onDrawableMetricsChanged?(metrics)
     }
 
     func handleBecomeActive() {

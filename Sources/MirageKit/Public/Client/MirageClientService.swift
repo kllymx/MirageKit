@@ -543,8 +543,6 @@ public final class MirageClientService {
             return
         }
 
-        stopScreenPolling()
-
         let sessions = activeStreams
         let storedSessions = sessionStore.activeSessions
 
@@ -1354,9 +1352,6 @@ public final class MirageClientService {
     public func stopViewing(_ session: ClientStreamSession, minimizeWindow: Bool = false) async {
         let streamID = session.id
 
-        // Stop screen polling for this stream
-        stopScreenPolling()
-
         // Clear cached frames for this stream
         MirageFrameCache.shared.clear(for: streamID)
 
@@ -1575,9 +1570,6 @@ public final class MirageClientService {
                 // Resume the waiting startViewing call with the real stream ID
                 streamStartedContinuation?.resume(returning: streamID)
                 streamStartedContinuation = nil
-
-                // Start screen polling for external display detection (iOS only)
-                startScreenPolling(for: streamID)
 
                 // CRITICAL: Set up controller BEFORE registering for UDP
                 // This ensures frames can be processed as soon as they arrive.
@@ -2107,14 +2099,8 @@ public final class MirageClientService {
 
     // MARK: - Display Resolution Helpers
 
-    /// Task for polling screen changes on iOS
-    private var screenPollingTask: Task<Void, Never>?
-
-    /// Last known screen resolution for change detection
-    private var lastKnownScreenResolution: CGSize = .zero
-
-    /// Get the display resolution for the screen the window is currently on
-    /// Intelligently detects which display the window is on (built-in vs external)
+    /// Get the display resolution for the client stream.
+    /// Uses cached drawable size when available; falls back to the main screen.
     private func scaledDisplayResolution(_ resolution: CGSize) -> CGSize {
         let width = max(2, floor(resolution.width / 2) * 2)
         let height = max(2, floor(resolution.height / 2) * 2)
@@ -2138,11 +2124,10 @@ public final class MirageClientService {
             height: mainScreen.frame.height * scale
         )
         #elseif os(iOS)
-        // Get the screen the window is currently displayed on
-        guard let screen = Self.currentWindowScreen() else {
-            // Default resolution if no screen can be determined
-            return CGSize(width: 2560, height: 1600)
+        if Self.lastKnownDrawableSize.width > 0, Self.lastKnownDrawableSize.height > 0 {
+            return Self.lastKnownDrawableSize
         }
+        let screen = UIScreen.main
         let nativeBounds = screen.nativeBounds
         if nativeBounds.width > 0, nativeBounds.height > 0 {
             return nativeBounds.size
@@ -2186,126 +2171,9 @@ public final class MirageClientService {
     }
 
     #if os(iOS)
-    /// Cached drawable size from the Metal view (updated by MirageStreamContentView)
-    /// Used to help determine which screen the window is actually displayed on
+    /// Cached drawable size from the Metal view.
     public static var lastKnownDrawableSize: CGSize = .zero
-
-    /// Returns the screen that the app's window is currently displayed on.
-    /// Treats all screens equally - no concept of "main" vs "external".
-    /// Returns nil if no screen can be determined.
-    public static func currentWindowScreen() -> UIScreen? {
-        let allScreens = UIScreen.screens
-        guard !allScreens.isEmpty else { return nil }
-
-        // First, try to match drawable size to a screen
-        // This is the most reliable way because Metal reports actual rendering resolution
-        if lastKnownDrawableSize.width > 0 && lastKnownDrawableSize.height > 0 {
-            var bestMatch: UIScreen?
-            var bestScore: CGFloat = .greatestFiniteMagnitude
-
-            for screen in allScreens {
-                let nativeSize = screen.nativeBounds.size
-                // Score is how different the drawable is from this screen's native size
-                let widthDiff = abs(nativeSize.width - lastKnownDrawableSize.width)
-                let heightDiff = abs(nativeSize.height - lastKnownDrawableSize.height)
-                let score = widthDiff + heightDiff
-
-                if score < bestScore {
-                    bestScore = score
-                    bestMatch = screen
-                }
-            }
-
-            // If we have a close match (within 100 pixels), use it
-            if let match = bestMatch, bestScore < 100 {
-                MirageLogger.debug(.client, "currentWindowScreen: matched drawable \(Int(lastKnownDrawableSize.width))x\(Int(lastKnownDrawableSize.height)) to screen \(match.nativeBounds.size)")
-                return match
-            }
-        }
-
-        // Second, try the window scene's screen property
-        for scene in UIApplication.shared.connectedScenes {
-            guard let windowScene = scene as? UIWindowScene,
-                  scene.activationState == .foregroundActive else { continue }
-
-            let screen = windowScene.screen
-            MirageLogger.debug(.client, "currentWindowScreen: scene reports screen=\(screen.bounds)")
-            return screen
-        }
-
-        // Third, check key window's screen
-        if let keyWindow = UIWindow.current {
-            let screen = keyWindow.screen
-            MirageLogger.debug(.client, "currentWindowScreen: key window screen=\(screen.bounds)")
-            return screen
-        }
-
-        // Last resort: first available screen
-        MirageLogger.debug(.client, "currentWindowScreen: falling back to first available screen")
-        return allScreens.first
-    }
-
-    /// Alias for currentWindowScreen for clearer API
-    public static func preferredScreen() -> UIScreen? {
-        return currentWindowScreen()
-    }
     #endif
-
-    /// Start polling for screen changes (iOS only)
-    /// Detects when user moves app to external display and sends resolution update
-    private func startScreenPolling(for streamID: StreamID) {
-        #if os(iOS)
-        // Cancel any existing polling
-        screenPollingTask?.cancel()
-
-        // Store initial resolution (must be on MainActor for UIApplication access)
-        lastKnownScreenResolution = getMainDisplayResolution()
-        MirageLogger.client("Screen polling started, initial resolution: \(Int(lastKnownScreenResolution.width))x\(Int(lastKnownScreenResolution.height))")
-
-        screenPollingTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    // Poll every 500ms
-                    try await Task.sleep(nanoseconds: 500_000_000)
-                } catch {
-                    break // Task cancelled
-                }
-
-                guard let self else { break }
-
-                // CRITICAL: UIApplication.shared.connectedScenes must be accessed on MainActor
-                // Without this, currentWindowScreen() may return stale/wrong screen info
-                let currentResolution = await MainActor.run {
-                    self.getMainDisplayResolution()
-                }
-
-                // Check if resolution changed significantly (more than 10 pixels difference)
-                let widthChanged = abs(currentResolution.width - self.lastKnownScreenResolution.width) > 10
-                let heightChanged = abs(currentResolution.height - self.lastKnownScreenResolution.height) > 10
-
-                if widthChanged || heightChanged {
-                    MirageLogger.client("Screen changed: \(Int(self.lastKnownScreenResolution.width))x\(Int(self.lastKnownScreenResolution.height)) -> \(Int(currentResolution.width))x\(Int(currentResolution.height))")
-                    self.lastKnownScreenResolution = currentResolution
-
-                    // Send resolution change to host
-                    do {
-                        try await self.sendDisplayResolutionChange(streamID: streamID, newResolution: currentResolution)
-                    } catch {
-                        MirageLogger.error(.client, "Failed to send display resolution change: \(error)")
-                    }
-                }
-            }
-        }
-        #endif
-    }
-
-    /// Stop screen polling
-    private func stopScreenPolling() {
-        #if os(iOS)
-        screenPollingTask?.cancel()
-        screenPollingTask = nil
-        #endif
-    }
 
     /// Send display resolution change to host (when window moves to different display)
     public func sendDisplayResolutionChange(streamID: StreamID, newResolution: CGSize) async throws {

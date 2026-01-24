@@ -15,24 +15,12 @@ import AppKit
 /// This view bridges `MirageStreamViewRepresentable` with a `MirageClientSessionStore`
 /// to coordinate focus, resize events, and input forwarding.
 public struct MirageStreamContentView: View {
-    #if os(iOS)
-    @Environment(\.currentScreen) private var currentScreen
-    #endif
-
     public let session: MirageStreamSessionState
     public let sessionStore: MirageClientSessionStore
     public let clientService: MirageClientService
     public let isDesktopStream: Bool
     public let onExitDesktopStream: (() -> Void)?
     public let dockSnapEnabled: Bool
-
-    /// Last relative sizing sent to host - prevents duplicate resize events.
-    @State private var lastSentAspectRatio: CGFloat = 0
-    @State private var lastSentRelativeScale: CGFloat = 0
-    @State private var lastSentPixelSize: CGSize = .zero
-
-    /// Debounce task for resize events - only sends after user stops resizing.
-    @State private var resizeDebounceTask: Task<Void, Never>?
 
     /// Resize holdoff task used during foreground transitions (iOS).
     @State private var resizeHoldoffTask: Task<Void, Never>?
@@ -42,19 +30,10 @@ public struct MirageStreamContentView: View {
 
     /// Whether the client is currently waiting for host to complete resize.
     @State private var isResizing: Bool = false
+    @State private var resizeFallbackTask: Task<Void, Never>?
 
     @State private var scrollInputSampler = ScrollInputSampler()
     @State private var pointerInputSampler = PointerInputSampler()
-
-    #if os(iOS)
-    /// Captured screen info for async operations (environment values can't be accessed in Tasks).
-    @State private var capturedScreenBounds: CGRect = .zero
-    @State private var capturedScreenScale: CGFloat = 2.0
-    #endif
-
-    /// Maximum resolution cap to prevent GPU overload (5K).
-    private static let maxResolutionWidth: CGFloat = 5120
-    private static let maxResolutionHeight: CGFloat = 2880
 
     /// Creates a streaming content view backed by a session store and client service.
     /// - Parameters:
@@ -88,8 +67,8 @@ public struct MirageStreamContentView: View {
                 onInputEvent: { event in
                     sendInputEvent(event)
                 },
-                onDrawableSizeChanged: { pixelSize in
-                    handleDrawableSizeChanged(pixelSize)
+                onDrawableMetricsChanged: { metrics in
+                    handleDrawableMetricsChanged(metrics)
                 },
                 cursorStore: clientService.cursorStore,
                 onBecomeActive: {
@@ -106,8 +85,8 @@ public struct MirageStreamContentView: View {
                 onInputEvent: { event in
                     sendInputEvent(event)
                 },
-                onDrawableSizeChanged: { pixelSize in
-                    handleDrawableSizeChanged(pixelSize)
+                onDrawableMetricsChanged: { metrics in
+                    handleDrawableMetricsChanged(metrics)
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -144,15 +123,9 @@ public struct MirageStreamContentView: View {
         .onDisappear {
             scrollInputSampler.reset()
             pointerInputSampler.reset()
+            resizeFallbackTask?.cancel()
+            resizeFallbackTask = nil
         }
-        #if os(iOS)
-        .readScreen { screen in
-            Task { @MainActor in
-                capturedScreenBounds = screen.bounds
-                capturedScreenScale = screen.nativeScale
-            }
-        }
-        #endif
         #if os(macOS)
         .background(
             MirageWindowFocusObserver(
@@ -221,102 +194,45 @@ public struct MirageStreamContentView: View {
         clientService.sendInputFireAndForget(event, forStream: session.streamID)
     }
 
-    private func handleDrawableSizeChanged(_ pixelSize: CGSize) {
-        guard pixelSize.width > 0, pixelSize.height > 0 else { return }
+    private func handleDrawableMetricsChanged(_ metrics: MirageDrawableMetrics) {
+        guard metrics.pixelSize.width > 0, metrics.pixelSize.height > 0 else { return }
         guard allowsResizeEvents else { return }
 
         if session.hasReceivedFirstFrame {
             isResizing = true
+            resizeFallbackTask?.cancel()
+            resizeFallbackTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: .seconds(2))
+                } catch {
+                    return
+                }
+                if isResizing {
+                    isResizing = false
+                }
+            }
         }
 
-#if os(iOS)
-        MirageClientService.lastKnownDrawableSize = pixelSize
-
-        let screenBounds = currentScreen?.bounds
-            ?? (!capturedScreenBounds.isEmpty ? capturedScreenBounds : CGRect(x: 0, y: 0, width: 1920, height: 1080))
-        let scaleFactor: CGFloat
-        if let currentScale = currentScreen?.nativeScale, currentScale > 0 {
-            scaleFactor = currentScale
-        } else if capturedScreenScale > 0 {
-            scaleFactor = capturedScreenScale
-        } else {
-            scaleFactor = 2.0
-        }
-#else
+        #if os(iOS)
+        MirageClientService.lastKnownDrawableSize = metrics.pixelSize
+        let fallbackScreenSize = CGSize(width: 1920, height: 1080)
+        #else
         let screenBounds = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
-        let scaleFactor = NSScreen.main?.backingScaleFactor ?? 2.0
-#endif
+        let fallbackScreenSize = screenBounds.size
+        #endif
 
-        resizeDebounceTask?.cancel()
+        let viewSize = metrics.viewSize
+        let scaleFactor = metrics.scaleFactor
 
-        resizeDebounceTask = Task { @MainActor in
-            do {
-                try await Task.sleep(for: .milliseconds(200))
-            } catch {
-                return
-            }
+        let effectiveScreenSize = (viewSize == .zero) ? fallbackScreenSize : viewSize
 
-            guard allowsResizeEvents else { return }
-
-            let aspectRatio = pixelSize.width / pixelSize.height
-
-            var cappedSize = pixelSize
-            if cappedSize.width > Self.maxResolutionWidth {
-                cappedSize.width = Self.maxResolutionWidth
-                cappedSize.height = cappedSize.width / aspectRatio
-            }
-            if cappedSize.height > Self.maxResolutionHeight {
-                cappedSize.height = Self.maxResolutionHeight
-                cappedSize.width = cappedSize.height * aspectRatio
-            }
-
-            cappedSize.width = floor(cappedSize.width / 2) * 2
-            cappedSize.height = floor(cappedSize.height / 2) * 2
-            let cappedPixelSize = CGSize(width: cappedSize.width, height: cappedSize.height)
-
-            let drawablePointSize = CGSize(
-                width: cappedSize.width / scaleFactor,
-                height: cappedSize.height / scaleFactor
+        Task { @MainActor [clientService] in
+            guard let controller = clientService.controller(for: session.streamID) else { return }
+            await controller.handleDrawableSizeChanged(
+                metrics.pixelSize,
+                screenBounds: effectiveScreenSize,
+                scaleFactor: scaleFactor
             )
-            let drawableArea = drawablePointSize.width * drawablePointSize.height
-            let screenArea = screenBounds.width * screenBounds.height
-            let relativeScale = min(1.0, drawableArea / screenArea)
-
-            let isInitialLayout = lastSentAspectRatio == 0 && lastSentRelativeScale == 0 && lastSentPixelSize == .zero
-            if isInitialLayout {
-                lastSentAspectRatio = aspectRatio
-                lastSentRelativeScale = relativeScale
-                lastSentPixelSize = cappedPixelSize
-                return
-            }
-
-            let aspectChanged = abs(aspectRatio - lastSentAspectRatio) > 0.01
-            let scaleChanged = abs(relativeScale - lastSentRelativeScale) > 0.01
-            let pixelChanged = cappedPixelSize != lastSentPixelSize
-            guard aspectChanged || scaleChanged || pixelChanged else { return }
-
-            lastSentAspectRatio = aspectRatio
-            lastSentRelativeScale = relativeScale
-            lastSentPixelSize = cappedPixelSize
-
-            let event = MirageRelativeResizeEvent(
-                windowID: session.window.id,
-                aspectRatio: aspectRatio,
-                relativeScale: relativeScale,
-                clientScreenSize: screenBounds.size,
-                pixelWidth: Int(cappedSize.width),
-                pixelHeight: Int(cappedSize.height)
-            )
-            do {
-                try await clientService.sendInput(.relativeResize(event), forStream: session.streamID)
-            } catch {
-                MirageLogger.error(.client, "Failed to send relative resize event: \(error)")
-            }
-
-            try? await Task.sleep(for: .seconds(2))
-            if isResizing {
-                isResizing = false
-            }
         }
     }
 
@@ -338,9 +254,6 @@ public struct MirageStreamContentView: View {
         if isResizing {
             isResizing = false
         }
-
-        resizeDebounceTask?.cancel()
-        resizeDebounceTask = nil
 
         scheduleResizeHoldoff()
         clientService.requestStreamRecovery(for: session.streamID)

@@ -21,8 +21,8 @@ public class MirageMetalView: MTKView {
     private let renderState = MirageMetalRenderState()
     private let preferencesObserver = MirageUserDefaultsObserver()
 
-    /// Callback when drawable size changes - reports actual pixel dimensions
-    public var onDrawableSizeChanged: ((CGSize) -> Void)?
+    /// Callback when drawable metrics change - reports pixel size and scale factor
+    public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
 
     /// Last reported drawable size to avoid redundant callbacks
     private var lastReportedDrawableSize: CGSize = .zero
@@ -186,13 +186,13 @@ public class MirageMetalView: MTKView {
             }
         }
 
-        reportDrawableSizeIfChanged()
+        reportDrawableMetricsIfChanged()
     }
 
     /// Report actual drawable pixel size to ensure host captures at correct resolution
     /// FIRST report is immediate (no debounce) to enable correct initial resolution
     /// Subsequent reports are sent immediately on significant changes to begin resize blur right away.
-    private func reportDrawableSizeIfChanged() {
+    private func reportDrawableMetricsIfChanged() {
         let drawableSize = self.drawableSize
         guard drawableSize.width > 0 && drawableSize.height > 0 else { return }
 
@@ -202,7 +202,7 @@ public class MirageMetalView: MTKView {
             lastReportedDrawableSize = drawableSize
             renderState.markNeedsRedraw()
             MirageLogger.renderer("Initial drawable size (immediate): \(drawableSize.width)x\(drawableSize.height) px")
-            onDrawableSizeChanged?(drawableSize)
+            onDrawableMetricsChanged?(currentDrawableMetrics(drawableSize: drawableSize))
             return
         }
 
@@ -224,14 +224,23 @@ public class MirageMetalView: MTKView {
         lastReportedDrawableSize = drawableSize
         renderState.markNeedsRedraw()
         MirageLogger.renderer("Drawable size changed: \(drawableSize.width)x\(drawableSize.height) px")
-        onDrawableSizeChanged?(drawableSize)
+        onDrawableMetricsChanged?(currentDrawableMetrics(drawableSize: drawableSize))
+    }
+
+    private func currentDrawableMetrics(drawableSize: CGSize) -> MirageDrawableMetrics {
+        let scale = contentScaleFactor > 0 ? contentScaleFactor : effectiveScale
+        return MirageDrawableMetrics(
+            pixelSize: drawableSize,
+            viewSize: bounds.size,
+            scaleFactor: scale
+        )
     }
 
     public override func draw(_ rect: CGRect) {
         // Pull-based frame update: read directly from global cache using stream ID
         // This completely bypasses Swift actor machinery that blocks during iOS gesture tracking.
         // CRITICAL: No closures, no weak references to @MainActor objects, just direct cache access.
-        renderState.updateFrameIfNeeded(streamID: streamID, renderer: renderer)
+        guard renderState.updateFrameIfNeeded(streamID: streamID, renderer: renderer) else { return }
 
         guard let drawable = currentDrawable,
               let texture = renderState.currentTexture else { return }

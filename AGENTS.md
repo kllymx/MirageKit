@@ -140,6 +140,7 @@ MirageKit/
   //  Stream session state for client rendering.
   //
   ```
+- For `Created by` lines in Swift headers, check the system date or the file creation date before setting the date.
 - Keep public API edits in `Sources/MirageKit/Public` minimal and well documented.
 - Break different types into separate Swift files rather than placing multiple structs, classes, or enums in one file.
 - Do not introduce third-party frameworks without asking first.
