@@ -51,9 +51,6 @@ actor StreamController {
     /// Frame reassembler for this stream
     private let reassembler: FrameReassembler
 
-    /// Thread-safe frame storage for non-actor access (Metal draw loop)
-    private let frameStorage = StreamFrameStorage()
-
     /// Current resize state
     private(set) var resizeState: ResizeState = .idle
 
@@ -106,6 +103,8 @@ actor StreamController {
     /// Latest computed receive FPS sample
     private var currentReceiveFPS: Double = 0
     private var lastMetricsLogTime: CFAbsoluteTime = 0
+    private var lastMetricsDispatchTime: CFAbsoluteTime = 0
+    private static let metricsDispatchInterval: TimeInterval = 0.5
 
     // MARK: - Callbacks
 
@@ -124,6 +123,9 @@ actor StreamController {
     /// The delegate should read from MirageFrameCache if it needs the actual frame.
     private(set) var onFrameDecoded: (@MainActor @Sendable (ClientFrameMetrics) -> Void)? = nil
 
+    /// Called when the first frame is decoded for a stream.
+    private(set) var onFirstFrame: (@MainActor @Sendable () -> Void)?
+
     /// Called when input blocking state changes (true = block input, false = allow input)
     /// Input should be blocked when decoder is in a bad state (awaiting keyframe, decode errors)
     private(set) var onInputBlockingChanged: (@MainActor @Sendable (Bool) -> Void)?
@@ -137,12 +139,14 @@ actor StreamController {
         onResizeEvent: (@MainActor @Sendable (ResizeEvent) -> Void)?,
         onResizeStateChanged: (@MainActor @Sendable (ResizeState) -> Void)? = nil,
         onFrameDecoded: (@MainActor @Sendable (ClientFrameMetrics) -> Void)? = nil,
+        onFirstFrame: (@MainActor @Sendable () -> Void)? = nil,
         onInputBlockingChanged: (@MainActor @Sendable (Bool) -> Void)? = nil
     ) {
         self.onKeyframeNeeded = onKeyframeNeeded
         self.onResizeEvent = onResizeEvent
         self.onResizeStateChanged = onResizeStateChanged
         self.onFrameDecoded = onFrameDecoded
+        self.onFirstFrame = onFirstFrame
         self.onInputBlockingChanged = onInputBlockingChanged
     }
 
@@ -157,30 +161,6 @@ actor StreamController {
 
     /// Start the controller - sets up decoder and reassembler callbacks
     func start() async {
-        // Create AsyncStream for ordered frame processing
-        // This ensures frames are decoded in the order they were received,
-        // preventing P-frame decode errors caused by out-of-order Task execution
-        let (stream, continuation) = AsyncStream.makeStream(of: FrameData.self, bufferingPolicy: .unbounded)
-        frameContinuation = continuation
-
-        // Start the frame processing task - single task processes all frames sequentially
-        let capturedDecoder = decoder
-        frameProcessingTask = Task { [weak self] in
-            for await frame in stream {
-                guard self != nil else { break }
-                do {
-                    try await capturedDecoder.decodeFrame(
-                        frame.data,
-                        presentationTime: frame.presentationTime,
-                        isKeyframe: frame.isKeyframe,
-                        contentRect: frame.contentRect
-                    )
-                } catch {
-                    MirageLogger.error(.client, "Decode error: \(error)")
-                }
-            }
-        }
-
         // Set up error recovery - request keyframe when decode errors exceed threshold
         await decoder.setErrorThresholdHandler { [weak self] in
             guard let self else { return }
@@ -209,12 +189,8 @@ actor StreamController {
         }
 
         // Set up frame handler
-        let capturedFrameStorage = frameStorage
         await decoder.startDecoding { [weak self] (pixelBuffer: CVPixelBuffer, presentationTime: CMTime, contentRect: CGRect) in
             guard let self else { return }
-
-            // Store in thread-safe storage for Metal view pull-based access
-            capturedFrameStorage.store(pixelBuffer, contentRect: contentRect)
 
             // Also store in global cache for iOS gesture tracking compatibility
             MirageFrameCache.shared.store(pixelBuffer, contentRect: contentRect, for: capturedStreamID)
@@ -228,8 +204,35 @@ actor StreamController {
             }
         }
 
+        await startFrameProcessingPipeline()
+    }
+
+    private func startFrameProcessingPipeline() async {
+        // Create AsyncStream for ordered frame processing
+        // This ensures frames are decoded in the order they were received,
+        // preventing P-frame decode errors caused by out-of-order Task execution
+        let (stream, continuation) = AsyncStream.makeStream(of: FrameData.self, bufferingPolicy: .unbounded)
+        frameContinuation = continuation
+
+        // Start the frame processing task - single task processes all frames sequentially
+        let capturedDecoder = decoder
+        frameProcessingTask = Task { [weak self] in
+            for await frame in stream {
+                guard self != nil else { break }
+                do {
+                    try await capturedDecoder.decodeFrame(
+                        frame.data,
+                        presentationTime: frame.presentationTime,
+                        isKeyframe: frame.isKeyframe,
+                        contentRect: frame.contentRect
+                    )
+                } catch {
+                    MirageLogger.error(.client, "Decode error: \(error)")
+                }
+            }
+        }
+
         // Set up reassembler callback - yields frames to AsyncStream for ordered processing
-        let capturedContinuation = frameContinuation
         let recordReceivedFrame: @Sendable () -> Void = { [weak self] in
             Task { await self?.recordReceivedFrame() }
         }
@@ -244,7 +247,7 @@ actor StreamController {
 
             // Yield to stream instead of creating a new Task
             // AsyncStream maintains FIFO order, ensuring frames are decoded sequentially
-            capturedContinuation?.yield(FrameData(
+            continuation.yield(FrameData(
                 data: copiedData,
                 presentationTime: presentationTime,
                 isKeyframe: isKeyframe,
@@ -254,19 +257,22 @@ actor StreamController {
         await reassembler.setFrameHandler(reassemblerHandler)
     }
 
+    private func stopFrameProcessingPipeline() {
+        frameContinuation?.finish()
+        frameContinuation = nil
+        frameProcessingTask?.cancel()
+        frameProcessingTask = nil
+    }
+
     /// Stop the controller and clean up resources
     func stop() async {
         // Stop frame processing - finish stream and cancel task
-        frameContinuation?.finish()
-        frameProcessingTask?.cancel()
-        frameProcessingTask = nil
-        frameContinuation = nil
+        stopFrameProcessingPipeline()
 
         resizeDebounceTask?.cancel()
         resizeDebounceTask = nil
         keyframeRecoveryTask?.cancel()
         keyframeRecoveryTask = nil
-        frameStorage.clear()
         MirageFrameCache.shared.clear(for: streamID)
     }
 
@@ -288,6 +294,12 @@ actor StreamController {
     }
 
     private func notifyFrameDecoded() async {
+        let now = CFAbsoluteTimeGetCurrent()
+        if lastMetricsDispatchTime > 0, now - lastMetricsDispatchTime < Self.metricsDispatchInterval {
+            return
+        }
+
+        lastMetricsDispatchTime = now
         let decodedFPS = currentFPS
         let receivedFPS = currentReceiveFPS
         let droppedFrames = await reassembler.getDroppedFrameCount()
@@ -303,17 +315,12 @@ actor StreamController {
         }
     }
 
-    // MARK: - Frame Access
-
-    /// Get the latest frame (thread-safe, for Metal draw loop)
-    nonisolated func getLatestFrame() -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)? {
-        frameStorage.get()
-    }
-
     // MARK: - Decoder Control
 
     /// Reset decoder for new session (e.g., after resize or reconnection)
     func resetForNewSession() async {
+        // Drop any queued frames from the previous session to avoid BadData storms.
+        stopFrameProcessingPipeline()
         await decoder.resetForNewSession()
         await reassembler.reset()
         decodedFrameCount = 0
@@ -323,6 +330,8 @@ actor StreamController {
         currentReceiveFPS = 0
         receiveSampleTimes.removeAll()
         lastMetricsLogTime = 0
+        lastMetricsDispatchTime = 0
+        await startFrameProcessingPipeline()
     }
 
     private func updateSampleTimes(_ sampleTimes: inout [CFAbsoluteTime], now: CFAbsoluteTime) -> Double {
@@ -411,9 +420,11 @@ actor StreamController {
     /// Request stream recovery (keyframe + reassembler reset)
     func requestRecovery() async {
         await clearResizeState()
+        stopFrameProcessingPipeline()
         await decoder.resetForNewSession()
         await reassembler.reset()
         await reassembler.enterKeyframeOnlyMode()
+        await startFrameProcessingPipeline()
         Task { @MainActor [weak self] in
             await self?.onKeyframeNeeded?()
         }
@@ -422,7 +433,11 @@ actor StreamController {
     // MARK: - Private Helpers
 
     private func markFirstFrameReceived() {
+        guard !hasReceivedFirstFrame else { return }
         hasReceivedFirstFrame = true
+        Task { @MainActor [weak self] in
+            await self?.onFirstFrame?()
+        }
     }
 
     /// Update input blocking state and notify callback
@@ -565,33 +580,5 @@ actor StreamController {
         } catch {
             // Cancelled, ignore
         }
-    }
-}
-
-// MARK: - Stream Frame Storage
-
-/// Thread-safe storage for a single stream's latest frame
-/// Separate from the global MirageFrameCache to allow per-controller storage
-final class StreamFrameStorage: @unchecked Sendable {
-    private let lock = NSLock()
-    private var frame: (pixelBuffer: CVPixelBuffer, contentRect: CGRect)?
-
-    func store(_ pixelBuffer: CVPixelBuffer, contentRect: CGRect) {
-        lock.lock()
-        frame = (pixelBuffer, contentRect)
-        lock.unlock()
-    }
-
-    func get() -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)? {
-        lock.lock()
-        let result = frame
-        lock.unlock()
-        return result
-    }
-
-    func clear() {
-        lock.lock()
-        frame = nil
-        lock.unlock()
     }
 }

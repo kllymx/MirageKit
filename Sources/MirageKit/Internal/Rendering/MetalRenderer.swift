@@ -16,10 +16,12 @@ struct RenderUniforms {
 final class MetalRenderer {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
-    private let pipelineState: MTLRenderPipelineState
+    private let pipelineStateDither: MTLRenderPipelineState
+    private let pipelineStateNoDither: MTLRenderPipelineState
     private var textureCache: CVMetalTextureCache?
     private var uniformsBuffer: MTLBuffer?
     private var frameCount: UInt32 = 0
+    private var temporalDitheringEnabled: Bool = true
 
     init(device: MTLDevice? = nil) throws {
         guard let mtlDevice = device ?? MTLCreateSystemDefaultDevice() else {
@@ -46,16 +48,25 @@ final class MetalRenderer {
             textureCache = cache
         }
 
-        // Create uniforms buffer for temporal dithering and contentRect
+        // Create uniforms buffer for contentRect and optional dithering
         self.uniformsBuffer = mtlDevice.makeBuffer(length: MemoryLayout<RenderUniforms>.size, options: .storageModeShared)
 
-        // Create render pipeline
-        pipelineState = try Self.createPipeline(device: mtlDevice)
+        // Create render pipelines (dithered and non-dithered)
+        let library = try Self.makeLibrary(device: mtlDevice)
+        pipelineStateDither = try Self.createPipeline(
+            device: mtlDevice,
+            library: library,
+            fragmentFunctionName: "videoFragmentDither"
+        )
+        pipelineStateNoDither = try Self.createPipeline(
+            device: mtlDevice,
+            library: library,
+            fragmentFunctionName: "videoFragmentPlain"
+        )
     }
 
-    private static func createPipeline(device: MTLDevice) throws -> MTLRenderPipelineState {
-        // Shader source with temporal dithering to reduce color banding
-        // and contentRect support for SCK black bar cropping
+    private static func makeLibrary(device: MTLDevice) throws -> MTLLibrary {
+        // Shader source with optional temporal dithering and contentRect support.
         let shaderSource = """
         #include <metal_stdlib>
         using namespace metal;
@@ -116,7 +127,7 @@ final class MetalRenderer {
             return interleavedGradientNoise(screenPos + offset * 1000.0);
         }
 
-        fragment float4 videoFragment(
+        fragment float4 videoFragmentDither(
             VertexOut in [[stage_in]],
             texture2d<float> colorTexture [[texture(0)]],
             constant Uniforms& uniforms [[buffer(0)]]
@@ -131,13 +142,27 @@ final class MetalRenderer {
 
             return color;
         }
+
+        fragment float4 videoFragmentPlain(
+            VertexOut in [[stage_in]],
+            texture2d<float> colorTexture [[texture(0)]]
+        ) {
+            constexpr sampler textureSampler(mag_filter::linear, min_filter::linear);
+            return colorTexture.sample(textureSampler, in.texCoord);
+        }
         """
 
-        let library = try device.makeLibrary(source: shaderSource, options: nil)
+        return try device.makeLibrary(source: shaderSource, options: nil)
+    }
 
+    private static func createPipeline(
+        device: MTLDevice,
+        library: MTLLibrary,
+        fragmentFunctionName: String
+    ) throws -> MTLRenderPipelineState {
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.vertexFunction = library.makeFunction(name: "videoVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "videoFragment")
+        descriptor.fragmentFunction = library.makeFunction(name: fragmentFunctionName)
         descriptor.colorAttachments[0].pixelFormat = .bgr10a2Unorm
 
         return try device.makeRenderPipelineState(descriptor: descriptor)
@@ -186,6 +211,9 @@ final class MetalRenderer {
     ///   - drawable: The drawable to render to
     ///   - contentRect: The region containing actual content (in pixels). If nil or empty, uses full texture.
     func render(texture: MTLTexture, to drawable: CAMetalDrawable, contentRect: CGRect? = nil) {
+        let signpostState = MirageSignpost.beginInterval("Render")
+        defer { MirageSignpost.endInterval("Render", signpostState) }
+
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         let renderPassDescriptor = MTLRenderPassDescriptor()
@@ -198,6 +226,7 @@ final class MetalRenderer {
             return
         }
 
+        let pipelineState = temporalDitheringEnabled ? pipelineStateDither : pipelineStateNoDither
         encoder.setRenderPipelineState(pipelineState)
         encoder.setFragmentTexture(texture, index: 0)
 
@@ -269,5 +298,9 @@ final class MetalRenderer {
         if let cache = textureCache {
             CVMetalTextureCacheFlush(cache, 0)
         }
+    }
+
+    func setTemporalDitheringEnabled(_ enabled: Bool) {
+        temporalDitheringEnabled = enabled
     }
 }

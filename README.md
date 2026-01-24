@@ -78,14 +78,13 @@ final class ClientController: MirageClientDelegate {
         try await clientService.connect(to: host)
         try await clientService.requestWindowList()
     }
-
-    func clientService(_ service: MirageClientService, didDecodeFrame pixelBuffer: CVPixelBuffer, forStream streamID: StreamID, contentRect: CGRect) {
-        MirageFrameCache.shared.store(pixelBuffer, contentRect: contentRect, for: streamID)
-    }
 }
 ```
 
 ### SwiftUI Stream View
+
+`MirageStreamViewRepresentable` reads frames from `MirageFrameCache` and does not require
+SwiftUI state updates per frame.
 
 ```swift
 import MirageKit
@@ -93,14 +92,10 @@ import SwiftUI
 
 struct StreamView: View {
     let streamID: StreamID
-    @State private var latestFrame: CVPixelBuffer?
-    @State private var contentRect: CGRect = .zero
 
     var body: some View {
         MirageStreamViewRepresentable(
             streamID: streamID,
-            latestFrame: $latestFrame,
-            contentRect: contentRect,
             onInputEvent: { event in
                 // Forward event to MirageClientService
             },

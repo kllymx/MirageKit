@@ -190,7 +190,7 @@ actor SharedVirtualDisplayManager {
     /// Creates the display if this is the first consumer, otherwise returns existing
     /// - Parameters:
     ///   - consumer: The consumer type acquiring the display
-    ///   - resolution: Optional resolution for the display (used by desktop streaming, capped at 5K)
+    ///   - resolution: Optional resolution for the display (used by desktop streaming; capture/encoder enforce the 5K cap)
     ///   - refreshRate: Refresh rate in Hz (default 60, use 120 for high refresh rate clients)
     /// - Returns: The managed display context
     // TODO: HDR support - add hdr: Bool parameter when EDR configuration is figured out

@@ -144,6 +144,10 @@ actor StreamContext {
     /// Frame rate for cadence and queue limits
     private var currentFrameRate: Int
 
+    /// Maximum encoded resolution (5K cap)
+    private static let maxEncodedWidth: CGFloat = 5120
+    private static let maxEncodedHeight: CGFloat = 2880
+
     /// Smoothed dirty percentage (0-1) used to avoid keyframes during high motion.
     private var smoothedDirtyPercentage: Double = 0
     private let motionSmoothingFactor: Double = 0.2
@@ -247,6 +251,32 @@ actor StreamContext {
     private static func clampStreamScale(_ scale: CGFloat) -> CGFloat {
         guard scale > 0 else { return 1.0 }
         return max(0.1, min(1.0, scale))
+    }
+
+    private func resolvedStreamScale(
+        for baseSize: CGSize,
+        requestedScale: CGFloat,
+        logLabel: String?
+    ) -> CGFloat {
+        let clampedRequested = StreamContext.clampStreamScale(requestedScale)
+        guard baseSize.width > 0, baseSize.height > 0 else {
+            return clampedRequested
+        }
+
+        let maxScale = min(
+            1.0,
+            Self.maxEncodedWidth / baseSize.width,
+            Self.maxEncodedHeight / baseSize.height
+        )
+        let resolved = min(clampedRequested, maxScale)
+
+        if resolved < clampedRequested, let logLabel {
+            MirageLogger.stream(
+                "\(logLabel): requested \(clampedRequested), capped \(resolved) for \(Int(baseSize.width))x\(Int(baseSize.height))"
+            )
+        }
+
+        return resolved
     }
 
     private static func alignedEvenPixel(_ value: CGFloat) -> Int {
@@ -847,7 +877,11 @@ actor StreamContext {
             let nextAdaptive = max(adaptiveScaleMin, adaptiveScale * adaptiveScaleDownStep)
             if nextAdaptive < adaptiveScale - 0.001 {
                 adaptiveScale = nextAdaptive
-                let effectiveScale = StreamContext.clampStreamScale(requestedStreamScale * adaptiveScale)
+                let effectiveScale = resolvedStreamScale(
+                    for: baseCaptureSize,
+                    requestedScale: requestedStreamScale * adaptiveScale,
+                    logLabel: "Resolution cap"
+                )
                 if effectiveScale != streamScale {
                     lastAdaptiveScaleChangeTime = now
                     adaptiveScaleLowStreak = 0
@@ -867,7 +901,11 @@ actor StreamContext {
             let nextAdaptive = min(1.0, adaptiveScale * adaptiveScaleUpStep)
             if nextAdaptive > adaptiveScale + 0.001 {
                 adaptiveScale = nextAdaptive
-                let effectiveScale = StreamContext.clampStreamScale(requestedStreamScale * adaptiveScale)
+                let effectiveScale = resolvedStreamScale(
+                    for: baseCaptureSize,
+                    requestedScale: requestedStreamScale * adaptiveScale,
+                    logLabel: "Resolution cap"
+                )
                 if effectiveScale != streamScale {
                     lastAdaptiveScaleChangeTime = now
                     adaptiveScaleLowStreak = 0
@@ -1024,6 +1062,11 @@ actor StreamContext {
         // Encode at scaled resolution for low latency
         let captureTarget = streamTargetDimensions(windowFrame: window.frame)
         baseCaptureSize = CGSize(width: captureTarget.width, height: captureTarget.height)
+        streamScale = resolvedStreamScale(
+            for: baseCaptureSize,
+            requestedScale: requestedStreamScale * adaptiveScale,
+            logLabel: "Resolution cap"
+        )
         let outputSize = scaledOutputSize(for: baseCaptureSize)
         currentCaptureSize = outputSize
         currentEncodedSize = outputSize
@@ -1143,6 +1186,11 @@ actor StreamContext {
         // Encode at scaled resolution from display native resolution or explicit pixel override
         let captureResolution = resolution ?? CGSize(width: display.width, height: display.height)
         baseCaptureSize = captureResolution
+        streamScale = resolvedStreamScale(
+            for: baseCaptureSize,
+            requestedScale: requestedStreamScale * adaptiveScale,
+            logLabel: "Resolution cap"
+        )
         let outputSize = scaledOutputSize(for: baseCaptureSize)
         currentCaptureSize = outputSize
         currentEncodedSize = outputSize
@@ -1255,6 +1303,11 @@ actor StreamContext {
         // Calculate capture and encoding resolutions
         let captureResolution = resolution ?? CGSize(width: display.width, height: display.height)
         baseCaptureSize = captureResolution
+        streamScale = resolvedStreamScale(
+            for: baseCaptureSize,
+            requestedScale: requestedStreamScale * adaptiveScale,
+            logLabel: "Resolution cap"
+        )
         let outputSize = scaledOutputSize(for: baseCaptureSize)
         currentCaptureSize = outputSize
         currentEncodedSize = outputSize
@@ -1430,6 +1483,11 @@ actor StreamContext {
         let captureScaleFactor: CGFloat = 2.0  // Virtual display is HiDPI 2x
         let captureTarget = streamTargetDimensions(windowFrame: scWindow.frame, scaleFactor: captureScaleFactor)
         baseCaptureSize = CGSize(width: captureTarget.width, height: captureTarget.height)
+        streamScale = resolvedStreamScale(
+            for: baseCaptureSize,
+            requestedScale: requestedStreamScale * adaptiveScale,
+            logLabel: "Resolution cap"
+        )
         let outputSize = scaledOutputSize(for: baseCaptureSize)
         currentCaptureSize = outputSize
         currentEncodedSize = outputSize
@@ -1595,6 +1653,11 @@ actor StreamContext {
         let captureScaleFactor: CGFloat = 2.0  // Virtual display is HiDPI 2x
         let captureTarget = streamTargetDimensions(windowFrame: scWindow.frame, scaleFactor: captureScaleFactor)
         baseCaptureSize = CGSize(width: captureTarget.width, height: captureTarget.height)
+        streamScale = resolvedStreamScale(
+            for: baseCaptureSize,
+            requestedScale: requestedStreamScale * adaptiveScale,
+            logLabel: "Resolution cap"
+        )
         let outputSize = scaledOutputSize(for: baseCaptureSize)
         currentCaptureSize = outputSize
         currentEncodedSize = outputSize
@@ -1688,6 +1751,11 @@ actor StreamContext {
         // Encode at scaled resolution based on stream scale
         let captureTarget = streamTargetDimensions(windowFrame: windowFrame)
         baseCaptureSize = CGSize(width: captureTarget.width, height: captureTarget.height)
+        streamScale = resolvedStreamScale(
+            for: baseCaptureSize,
+            requestedScale: requestedStreamScale * adaptiveScale,
+            logLabel: "Resolution cap"
+        )
         let outputSize = scaledOutputSize(for: baseCaptureSize)
         let width = Int(outputSize.width)
         let height = Int(outputSize.height)
@@ -1735,6 +1803,11 @@ actor StreamContext {
         resetPipelineStateForReconfiguration(reason: "resolution update")
 
         baseCaptureSize = CGSize(width: width, height: height)
+        streamScale = resolvedStreamScale(
+            for: baseCaptureSize,
+            requestedScale: requestedStreamScale * adaptiveScale,
+            logLabel: "Resolution cap"
+        )
         let outputSize = scaledOutputSize(for: baseCaptureSize)
         let scaledWidth = Int(outputSize.width)
         let scaledHeight = Int(outputSize.height)
@@ -1768,10 +1841,7 @@ actor StreamContext {
         let clampedScale = StreamContext.clampStreamScale(newScale)
         requestedStreamScale = clampedScale
         adaptiveScale = 1.0
-        guard clampedScale != streamScale else { return }
-
         let previousScale = streamScale
-        streamScale = clampedScale
 
         // Mark as resizing - frames will be dropped to prevent decode errors
         isResizing = true
@@ -1800,6 +1870,14 @@ actor StreamContext {
         }
         baseCaptureSize = derivedBaseSize
         guard derivedBaseSize.width > 0, derivedBaseSize.height > 0 else { return }
+
+        let resolvedScale = resolvedStreamScale(
+            for: derivedBaseSize,
+            requestedScale: requestedStreamScale,
+            logLabel: "Resolution cap"
+        )
+        guard resolvedScale != streamScale else { return }
+        streamScale = resolvedScale
 
         let outputSize = scaledOutputSize(for: derivedBaseSize)
         let scaledWidth = Int(outputSize.width)
@@ -1830,10 +1908,7 @@ actor StreamContext {
 
     private func applyStreamScale(_ newScale: CGFloat, logLabel: String) async throws {
         let clampedScale = StreamContext.clampStreamScale(newScale)
-        guard clampedScale != streamScale else { return }
-
         let previousScale = streamScale
-        streamScale = clampedScale
 
         isResizing = true
         defer { isResizing = false }
@@ -1858,6 +1933,14 @@ actor StreamContext {
         }
         baseCaptureSize = derivedBaseSize
         guard derivedBaseSize.width > 0, derivedBaseSize.height > 0 else { return }
+
+        let resolvedScale = resolvedStreamScale(
+            for: derivedBaseSize,
+            requestedScale: clampedScale,
+            logLabel: "Resolution cap"
+        )
+        guard resolvedScale != streamScale else { return }
+        streamScale = resolvedScale
 
         let outputSize = scaledOutputSize(for: derivedBaseSize)
         let scaledWidth = Int(outputSize.width)
@@ -1905,6 +1988,11 @@ actor StreamContext {
         resetPipelineStateForReconfiguration(reason: "display switch")
 
         baseCaptureSize = resolution
+        streamScale = resolvedStreamScale(
+            for: baseCaptureSize,
+            requestedScale: requestedStreamScale * adaptiveScale,
+            logLabel: "Resolution cap"
+        )
         let outputSize = scaledOutputSize(for: baseCaptureSize)
         let scaledWidth = Int(outputSize.width)
         let scaledHeight = Int(outputSize.height)

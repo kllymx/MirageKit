@@ -2,8 +2,6 @@ import Foundation
 import Network
 import Observation
 import CoreGraphics
-import CoreMedia
-import CoreVideo
 
 #if canImport(UIKit)
 import UIKit.UIDevice
@@ -84,9 +82,6 @@ public final class MirageClientService {
     /// Callback when desktop stream stops
     public var onDesktopStreamStopped: ((StreamID, DesktopStreamStopReason) -> Void)?
 
-    /// Handler for decoded video frames
-    public var onDecodedFrame: ((StreamID, CVPixelBuffer, CMTime, CGRect) -> Void)?
-
     /// Handler for minimum window size updates from the host
     public var onStreamMinimumSizeUpdate: ((StreamID, CGSize) -> Void)?
 
@@ -141,21 +136,10 @@ public final class MirageClientService {
 
     /// Session store for UI state and stream coordination.
     public let sessionStore: MirageClientSessionStore
-
-    // MARK: - Thread-Safe Frame Storage (for iOS gesture tracking)
-
-    /// Thread-safe storage for the latest decoded frame per stream.
-    /// This is updated BEFORE MainActor dispatch to ensure frames are available
-    /// during iOS gesture tracking when MainActor tasks are blocked.
-    private let latestFrameStorage = FrameStorage()
-
-    /// Get the latest decoded frame for a stream in a thread-safe manner.
-    /// This can be called from any thread (including Metal draw loops during gesture tracking).
-    /// - Parameter streamID: The stream ID to get the frame for
-    /// - Returns: The latest pixel buffer and content rect, or nil if no frame available
-    public nonisolated func getLatestFrame(for streamID: StreamID) -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)? {
-        return latestFrameStorage.getFrame(for: streamID)
-    }
+    /// Metrics store for stream telemetry (decoupled from SwiftUI).
+    public let metricsStore = MirageClientMetricsStore()
+    /// Cursor store for pointer updates (decoupled from SwiftUI).
+    public let cursorStore = MirageClientCursorStore()
 
     private var networkConfig: MirageNetworkConfiguration
     private var transport: HybridTransport?
@@ -574,9 +558,10 @@ public final class MirageClientService {
         }
 
         if let loginDisplayStreamID {
-            latestFrameStorage.clearFrame(for: loginDisplayStreamID)
             MirageFrameCache.shared.clear(for: loginDisplayStreamID)
         }
+        metricsStore.clearAll()
+        cursorStore.clearAll()
         sessionStore.clearLoginDisplayState()
 
         // Clean up video resources
@@ -1047,25 +1032,18 @@ public final class MirageClientService {
             onResizeEvent: { [weak self] event in
                 self?.handleResizeEvent(event, for: capturedStreamID)
             },
+            onResizeStateChanged: nil,
             onFrameDecoded: { [weak self] metrics in
                 guard let self else { return }
-                guard let (pixelBuffer, contentRect) = MirageFrameCache.shared.get(for: capturedStreamID) else { return }
-                self.sessionStore.handleDecodedFrame(
+                self.metricsStore.updateClientMetrics(
                     streamID: capturedStreamID,
-                    pixelBuffer: pixelBuffer,
-                    contentRect: contentRect,
                     decodedFPS: metrics.decodedFPS,
                     receivedFPS: metrics.receivedFPS,
                     droppedFrames: metrics.droppedFrames
                 )
-                self.onDecodedFrame?(capturedStreamID, pixelBuffer, .invalid, contentRect)
-                self.delegate?.clientService(
-                    self,
-                    didDecodeFrame: pixelBuffer,
-                    forStream: capturedStreamID,
-                    contentRect: contentRect,
-                    fps: metrics.decodedFPS
-                )
+            },
+            onFirstFrame: { [weak self] in
+                self?.sessionStore.markFirstFrameReceived(for: capturedStreamID)
             },
             onInputBlockingChanged: { [weak self] isBlocked in
                 self?.setInputBlocked(isBlocked, for: capturedStreamID)
@@ -1344,7 +1322,6 @@ public final class MirageClientService {
 
         // Clear stale frame from cache to avoid showing frozen content
         MirageFrameCache.shared.clear(for: streamID)
-        latestFrameStorage.clearFrame(for: streamID)
 
         // Request stream recovery from controller and refresh UDP registration
         Task { [weak self] in
@@ -1374,7 +1351,6 @@ public final class MirageClientService {
         stopScreenPolling()
 
         // Clear cached frames for this stream
-        latestFrameStorage.clearFrame(for: streamID)
         MirageFrameCache.shared.clear(for: streamID)
 
         let request = StopStreamMessage(streamID: streamID, minimizeWindow: minimizeWindow)
@@ -1639,8 +1615,9 @@ public final class MirageClientService {
             if let stopped = try? message.decode(StreamStoppedMessage.self) {
                 let streamID = stopped.streamID
                 activeStreams.removeAll { $0.id == streamID }
-                latestFrameStorage.clearFrame(for: streamID)
                 MirageFrameCache.shared.clear(for: streamID)
+                metricsStore.clear(streamID: streamID)
+                cursorStore.clear(streamID: streamID)
 
                 // Clean up per-stream resources
                 removeActiveStreamID(streamID)
@@ -1659,12 +1636,12 @@ public final class MirageClientService {
 
         case .streamMetricsUpdate:
             if let metrics = try? message.decode(StreamMetricsMessage.self) {
-                sessionStore.handleHostStreamMetrics(
+                metricsStore.updateHostMetrics(
                     streamID: metrics.streamID,
                     encodedFPS: metrics.encodedFPS,
                     idleEncodedFPS: metrics.idleEncodedFPS,
                     droppedFrames: metrics.droppedFrames,
-                    activeQuality: metrics.activeQuality
+                    activeQuality: Double(metrics.activeQuality)
                 )
             }
 
@@ -1685,7 +1662,11 @@ public final class MirageClientService {
         case .cursorUpdate:
             if let update = try? message.decode(CursorUpdateMessage.self) {
                 MirageLogger.client("Cursor update received: \(update.cursorType) (visible: \(update.isVisible))")
-                sessionStore.handleCursorUpdate(streamID: update.streamID, cursorType: update.cursorType, isVisible: update.isVisible)
+                cursorStore.updateCursor(
+                    streamID: update.streamID,
+                    cursorType: update.cursorType,
+                    isVisible: update.isVisible
+                )
                 onCursorUpdate?(update.streamID, update.cursorType, update.isVisible)
             }
 
@@ -1791,6 +1772,8 @@ public final class MirageClientService {
                 loginDisplayStreamID = nil
                 loginDisplayResolution = nil
                 sessionStore.stopLoginDisplay()
+                metricsStore.clear(streamID: streamID)
+                cursorStore.clear(streamID: streamID)
 
                 // Clean up login display stream resources
                 removeActiveStreamID(streamID)
@@ -1876,6 +1859,8 @@ public final class MirageClientService {
                 // Clean up desktop stream state
                 desktopStreamID = nil
                 desktopStreamResolution = nil
+                metricsStore.clear(streamID: streamID)
+                cursorStore.clear(streamID: streamID)
 
                 // Clean up stream resources
                 removeActiveStreamID(streamID)
@@ -2168,18 +2153,17 @@ public final class MirageClientService {
         #endif
     }
 
-    /// Get the maximum refresh rate supported by the current screen
-    /// Returns 120 for ProMotion displays, 60 for standard displays
+    /// Get the maximum refresh rate requested by the client.
+    /// iOS relies on the user-selected toggle; other platforms use the screen's max.
     private func getScreenMaxRefreshRate() -> Int {
-        let screenMax: Int
         #if os(iOS)
-        // Use UIWindow.current (defined at top of file) to get the current screen
-        if let screen = UIWindow.current?.screen {
-            screenMax = screen.maximumFramesPerSecond
-        } else {
-            screenMax = 120  // Default to 120 if screen unavailable (will be capped by actual display)
+        if let override = maxRefreshRateOverride {
+            return override
         }
-        #elseif os(macOS)
+        return 60
+        #else
+        let screenMax: Int
+        #if os(macOS)
         screenMax = NSScreen.main?.maximumFramesPerSecond ?? 120
         #elseif os(visionOS)
         screenMax = 120  // Vision Pro supports 120Hz
@@ -2191,6 +2175,7 @@ public final class MirageClientService {
             return override
         }
         return screenMax
+        #endif
     }
 
     #if os(iOS)
@@ -2381,79 +2366,5 @@ public struct ClientStreamSession: Identifiable, Sendable {
         self.id = id
         self.window = window
         self.quality = quality
-    }
-}
-
-// MARK: - Thread-Safe Frame Storage
-
-/// Thread-safe storage for decoded video frames.
-/// This allows frames to be stored from any thread and read from any thread,
-/// bypassing MainActor dispatch which gets blocked during iOS gesture tracking.
-///
-/// The key insight is that iOS's UITrackingRunLoopMode blocks MainActor task dispatch,
-/// but Metal's draw loop (running via CVDisplayLink) continues in all run loop modes.
-/// By storing frames here before MainActor dispatch, the Metal view can pull frames
-/// directly during gesture tracking.
-final class FrameStorage: @unchecked Sendable {
-    /// Lock for thread-safe access to the frames dictionary
-    private let lock = NSLock()
-
-    /// Stored frames per stream ID
-    private var frames: [StreamID: (pixelBuffer: CVPixelBuffer, contentRect: CGRect)] = [:]
-
-    /// Store a frame for a stream (thread-safe)
-    func storeFrame(_ pixelBuffer: CVPixelBuffer, contentRect: CGRect, for streamID: StreamID) {
-        lock.lock()
-        defer { lock.unlock() }
-        frames[streamID] = (pixelBuffer, contentRect)
-    }
-
-    /// Get the latest frame for a stream (thread-safe)
-    func getFrame(for streamID: StreamID) -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)? {
-        lock.lock()
-        defer { lock.unlock() }
-        return frames[streamID]
-    }
-
-    /// Clear frame for a stream (thread-safe)
-    func clearFrame(for streamID: StreamID) {
-        lock.lock()
-        defer { lock.unlock() }
-        frames.removeValue(forKey: streamID)
-    }
-
-    /// Clear all frames (thread-safe)
-    func clearAll() {
-        lock.lock()
-        defer { lock.unlock() }
-        frames.removeAll()
-    }
-}
-
-/// Thread-safe atomic storage for stream ID.
-/// Used to safely read the current stream ID from frame callbacks without MainActor access.
-final class AtomicStreamID: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: StreamID?
-
-    /// Store a stream ID (thread-safe)
-    func store(_ id: StreamID) {
-        lock.lock()
-        defer { lock.unlock() }
-        value = id
-    }
-
-    /// Get the current stream ID (thread-safe)
-    func load() -> StreamID? {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-
-    /// Clear the stream ID (thread-safe)
-    func clear() {
-        lock.lock()
-        defer { lock.unlock() }
-        value = nil
     }
 }

@@ -6,8 +6,6 @@
 //
 
 import SwiftUI
-import CoreVideo
-import QuartzCore
 #if os(macOS)
 import AppKit
 #endif
@@ -28,9 +26,6 @@ public struct MirageStreamContentView: View {
     public let onExitDesktopStream: (() -> Void)?
     public let dockSnapEnabled: Bool
 
-    /// Content rectangle for current frame (for SCK black bar cropping).
-    @State private var contentRect: CGRect = .zero
-
     /// Last relative sizing sent to host - prevents duplicate resize events.
     @State private var lastSentAspectRatio: CGFloat = 0
     @State private var lastSentRelativeScale: CGFloat = 0
@@ -48,14 +43,6 @@ public struct MirageStreamContentView: View {
     /// Whether the client is currently waiting for host to complete resize.
     @State private var isResizing: Bool = false
 
-    /// Whether we've received at least one frame (prevents resize blocking on initial load).
-    @State private var hasReceivedFirstFrame: Bool = false
-
-    /// The frame to display - frozen during resize, updated right before unblur.
-    @State private var displayedFrame: CVPixelBuffer?
-
-    /// Content rect for the displayed frame (frozen during resize).
-    @State private var displayedContentRect: CGRect = .zero
     @State private var scrollInputSampler = ScrollInputSampler()
     @State private var pointerInputSampler = PointerInputSampler()
 
@@ -98,16 +85,13 @@ public struct MirageStreamContentView: View {
 #if os(iOS)
             MirageStreamViewRepresentable(
                 streamID: session.streamID,
-                latestFrame: $displayedFrame,
-                contentRect: displayedContentRect,
                 onInputEvent: { event in
                     sendInputEvent(event)
                 },
                 onDrawableSizeChanged: { pixelSize in
                     handleDrawableSizeChanged(pixelSize)
                 },
-                cursorType: sessionStore.cursorTypes[session.streamID] ?? .arrow,
-                cursorVisible: sessionStore.cursorVisibility[session.streamID] ?? true,
+                cursorStore: clientService.cursorStore,
                 onBecomeActive: {
                     handleForegroundRecovery()
                 },
@@ -119,8 +103,6 @@ public struct MirageStreamContentView: View {
 #else
             MirageStreamViewRepresentable(
                 streamID: session.streamID,
-                latestFrame: $displayedFrame,
-                contentRect: displayedContentRect,
                 onInputEvent: { event in
                     sendInputEvent(event)
                 },
@@ -134,7 +116,7 @@ public struct MirageStreamContentView: View {
 #endif
         }
         .overlay {
-            if displayedFrame == nil {
+            if !session.hasReceivedFirstFrame {
                 Rectangle()
                     .fill(.black)
                     .overlay {
@@ -150,29 +132,12 @@ public struct MirageStreamContentView: View {
                     .allowsHitTesting(false)
             }
         }
-        .onChange(of: sessionStore.latestFrames[session.id]) { _, newFrame in
-            let latestContentRect = sessionStore.contentRects[session.id] ?? .zero
-            contentRect = latestContentRect
-
-            if !hasReceivedFirstFrame && newFrame != nil {
-                hasReceivedFirstFrame = true
-            }
-
-            guard !isResizing else { return }
-            displayedFrame = newFrame
-            displayedContentRect = latestContentRect
-        }
         .onChange(of: sessionStore.sessionMinSizes[session.id]) { _, _ in
             if isResizing {
-                displayedFrame = sessionStore.latestFrames[session.id]
-                displayedContentRect = contentRect
                 isResizing = false
             }
         }
         .onAppear {
-            displayedFrame = sessionStore.latestFrames[session.id]
-            displayedContentRect = sessionStore.contentRects[session.id] ?? .zero
-
             sessionStore.setFocusedSession(session.id)
             clientService.sendInputFireAndForget(.windowFocus, forStream: session.streamID)
         }
@@ -260,7 +225,7 @@ public struct MirageStreamContentView: View {
         guard pixelSize.width > 0, pixelSize.height > 0 else { return }
         guard allowsResizeEvents else { return }
 
-        if hasReceivedFirstFrame {
+        if session.hasReceivedFirstFrame {
             isResizing = true
         }
 
@@ -350,8 +315,6 @@ public struct MirageStreamContentView: View {
 
             try? await Task.sleep(for: .seconds(2))
             if isResizing {
-                displayedFrame = sessionStore.latestFrames[session.id]
-                displayedContentRect = contentRect
                 isResizing = false
             }
         }
@@ -373,8 +336,6 @@ public struct MirageStreamContentView: View {
 
     private func handleForegroundRecovery() {
         if isResizing {
-            displayedFrame = sessionStore.latestFrames[session.id]
-            displayedContentRect = contentRect
             isResizing = false
         }
 

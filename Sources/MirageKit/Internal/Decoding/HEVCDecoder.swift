@@ -377,6 +377,8 @@ actor HEVCDecoder {
                 return
             }
 
+            MirageSignpost.emitEvent("DecodeOutput")
+
             let info = Unmanaged<DecodeInfo>.fromOpaque(opaqueInfo).takeRetainedValue()
             // Successful decode - reset error counter
             info.errorTracker?.recordSuccess()

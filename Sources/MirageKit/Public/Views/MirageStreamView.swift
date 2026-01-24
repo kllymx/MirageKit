@@ -13,23 +13,33 @@ import SwiftUI
 /// simple lock-based synchronization, the Metal view's draw loop can access frames
 /// without any Swift concurrency overhead.
 public final class MirageFrameCache: @unchecked Sendable {
+    struct FrameEntry {
+        let pixelBuffer: CVPixelBuffer
+        let contentRect: CGRect
+        let sequence: UInt64
+    }
+
     /// Shared instance - use this from both decode callbacks and Metal views
     public static let shared = MirageFrameCache()
 
     private let lock = NSLock()
-    private var frames: [StreamID: (pixelBuffer: CVPixelBuffer, contentRect: CGRect)] = [:]
+    private var frames: [StreamID: FrameEntry] = [:]
 
     private init() {}
 
     /// Store a frame for a stream (called from decode callback)
     public func store(_ pixelBuffer: CVPixelBuffer, contentRect: CGRect, for streamID: StreamID) {
         lock.lock()
-        frames[streamID] = (pixelBuffer, contentRect)
+        let nextSequence = (frames[streamID]?.sequence ?? 0) &+ 1
+        frames[streamID] = FrameEntry(
+            pixelBuffer: pixelBuffer,
+            contentRect: contentRect,
+            sequence: nextSequence
+        )
         lock.unlock()
     }
 
-    /// Get the latest frame for a stream (called from Metal draw loop)
-    public func get(for streamID: StreamID) -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)? {
+    func getEntry(for streamID: StreamID) -> FrameEntry? {
         lock.lock()
         let result = frames[streamID]
         lock.unlock()
@@ -54,15 +64,27 @@ public class MirageMetalView: MTKView {
     private var renderer: MetalRenderer?
     private var currentTexture: MTLTexture?
     private var currentContentRect: CGRect = .zero
+    private var preferencesObserver: NSObjectProtocol?
+
+    public var temporalDitheringEnabled: Bool = true {
+        didSet {
+            renderer?.setTemporalDitheringEnabled(temporalDitheringEnabled)
+        }
+    }
 
     /// Stream ID for direct frame cache access (gesture tracking support)
-    var streamID: StreamID?
-
-    /// Legacy frame provider for backwards compatibility (not used if streamID is set)
-    var frameProvider: (() -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)?)?
+    var streamID: StreamID? {
+        didSet {
+            lastRenderedSequence = 0
+            needsRedraw = true
+            lastPixelBuffer = nil
+        }
+    }
 
     /// Track the last pixel buffer to avoid redundant texture creation
     private weak var lastPixelBuffer: CVPixelBuffer?
+    private var lastRenderedSequence: UInt64 = 0
+    private var needsRedraw = true
 
     /// Callback when drawable size changes - reports actual pixel dimensions
     public var onDrawableSizeChanged: ((CGSize) -> Void)?
@@ -99,6 +121,9 @@ public class MirageMetalView: MTKView {
         // P3 color space with 10-bit color for wide color gamut
         colorspace = CGColorSpace(name: CGColorSpace.displayP3)
         colorPixelFormat = .bgr10a2Unorm
+
+        applyRenderPreferences()
+        startObservingPreferences()
     }
 
     public override func layout() {
@@ -106,46 +131,66 @@ public class MirageMetalView: MTKView {
         reportDrawableSizeIfChanged()
     }
 
+    deinit {
+        stopObservingPreferences()
+    }
+
     /// Report actual drawable pixel size to ensure host captures at correct resolution
     private func reportDrawableSizeIfChanged() {
         let drawableSize = self.drawableSize
         if drawableSize != lastReportedDrawableSize && drawableSize.width > 0 && drawableSize.height > 0 {
             lastReportedDrawableSize = drawableSize
+            needsRedraw = true
             MirageLogger.renderer("Drawable size: \(drawableSize.width)x\(drawableSize.height) px (bounds: \(bounds.size))")
             onDrawableSizeChanged?(drawableSize)
         }
     }
 
-    /// Update with a new decoded frame
-    /// - Parameters:
-    ///   - pixelBuffer: The decoded video frame
-    ///   - contentRect: The region within the buffer containing actual content (for SCK black bar cropping)
-    public func updateFrame(_ pixelBuffer: CVPixelBuffer, contentRect: CGRect = .zero) {
-        currentTexture = renderer?.createTexture(from: pixelBuffer)
-        currentContentRect = contentRect
-        lastPixelBuffer = pixelBuffer
-    }
-
     public override func draw(_ rect: CGRect) {
         // Pull-based frame update to avoid MainActor stalls during menu tracking/dragging.
-        if let id = streamID, let (pixelBuffer, contentRect) = MirageFrameCache.shared.get(for: id) {
+        if let id = streamID, let entry = MirageFrameCache.shared.getEntry(for: id) {
+            if entry.sequence == lastRenderedSequence && !needsRedraw {
+                return
+            }
+            let pixelBuffer = entry.pixelBuffer
+            let contentRect = entry.contentRect
             if pixelBuffer !== lastPixelBuffer {
                 currentTexture = renderer?.createTexture(from: pixelBuffer)
-                currentContentRect = contentRect
                 lastPixelBuffer = pixelBuffer
             }
-        } else if let (pixelBuffer, contentRect) = frameProvider?() {
-            if pixelBuffer !== lastPixelBuffer {
-                currentTexture = renderer?.createTexture(from: pixelBuffer)
-                currentContentRect = contentRect
-                lastPixelBuffer = pixelBuffer
-            }
+            currentContentRect = contentRect
+            lastRenderedSequence = entry.sequence
+            needsRedraw = false
         }
 
         guard let drawable = currentDrawable,
               let texture = currentTexture else { return }
 
         renderer?.render(texture: texture, to: drawable, contentRect: currentContentRect)
+    }
+
+    private func applyRenderPreferences() {
+        let defaults = UserDefaults.standard
+        let enableDithering = defaults.object(forKey: "enableTemporalDithering") as? Bool ?? true
+        temporalDitheringEnabled = enableDithering
+    }
+
+    private func startObservingPreferences() {
+        guard preferencesObserver == nil else { return }
+        preferencesObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyRenderPreferences()
+        }
+    }
+
+    private func stopObservingPreferences() {
+        if let observer = preferencesObserver {
+            NotificationCenter.default.removeObserver(observer)
+            preferencesObserver = nil
+        }
     }
 }
 
@@ -540,6 +585,7 @@ public class MirageMetalView: MTKView {
     private var renderer: MetalRenderer?
     private var currentTexture: MTLTexture?
     private var currentContentRect: CGRect = .zero
+    private var preferencesObserver: NSObjectProtocol?
 
     /// Callback when drawable size changes - reports actual pixel dimensions
     public var onDrawableSizeChanged: ((CGSize) -> Void)?
@@ -550,16 +596,34 @@ public class MirageMetalView: MTKView {
     /// Stream ID for direct frame cache access (iOS gesture tracking support)
     /// The Metal view reads frames directly from MirageFrameCache using this ID,
     /// completely bypassing any Swift actor machinery that could block during gestures.
-    public var streamID: StreamID?
-
-    /// Legacy frame provider for backwards compatibility (not used if streamID is set)
-    public var frameProvider: (() -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)?)?
+    public var streamID: StreamID? {
+        didSet {
+            lastRenderedSequence = 0
+            needsRedraw = true
+            lastPixelBuffer = nil
+        }
+    }
 
     /// Track the last pixel buffer to avoid redundant texture creation
     private weak var lastPixelBuffer: CVPixelBuffer?
+    private var lastRenderedSequence: UInt64 = 0
+    private var needsRedraw = true
 
     /// Custom display link so drawing continues in UITrackingRunLoopMode.
     private var displayLink: CADisplayLink?
+    /// Optional per-frame callback for auxiliary updates (cursor refresh, etc.).
+    public var onFrameTick: (() -> Void)?
+    private var maxFramesPerSecondOverride: Int = 120 {
+        didSet {
+            updateDisplayLinkFrameRate()
+        }
+    }
+
+    public var temporalDitheringEnabled: Bool = true {
+        didSet {
+            renderer?.setTemporalDitheringEnabled(temporalDitheringEnabled)
+        }
+    }
 
 
     private var effectiveScale: CGFloat {
@@ -595,7 +659,6 @@ public class MirageMetalView: MTKView {
         // Configure for low latency
         isPaused = true
         enableSetNeedsDisplay = false
-        preferredFramesPerSecond = 120
 
         // Use 10-bit color with P3 color space for wide color gamut
         colorPixelFormat = .bgr10a2Unorm
@@ -610,13 +673,15 @@ public class MirageMetalView: MTKView {
             metalLayer.wantsExtendedDynamicRangeContent = true
             metalLayer.contentsScale = effectiveScale
         }
+
+        applyRenderPreferences()
+        startObservingPreferences()
     }
 
     public override func didMoveToWindow() {
         super.didMoveToWindow()
         if let window {
-            // Adapt to actual screen refresh rate (120Hz for ProMotion, 60Hz for standard)
-            preferredFramesPerSecond = window.screen.maximumFramesPerSecond
+            updateDisplayLinkFrameRate()
             startDisplayLink()
         } else {
             stopDisplayLink()
@@ -625,6 +690,7 @@ public class MirageMetalView: MTKView {
 
     deinit {
         stopDisplayLink()
+        stopObservingPreferences()
     }
 
     private func startDisplayLink() {
@@ -644,6 +710,7 @@ public class MirageMetalView: MTKView {
     /// Called when app becomes active to ensure rendering resumes.
     public func restartDisplayLinkIfNeeded() {
         guard window != nil, displayLink == nil else { return }
+        needsRedraw = true
         startDisplayLink()
     }
 
@@ -655,7 +722,19 @@ public class MirageMetalView: MTKView {
     }
 
     @objc private func displayLinkFired(_ link: CADisplayLink) {
+        onFrameTick?()
         draw()
+    }
+
+    private func resolvedPreferredFramesPerSecond() -> Int {
+        let screenMax = window?.screen.maximumFramesPerSecond ?? maxFramesPerSecondOverride
+        return min(maxFramesPerSecondOverride, screenMax)
+    }
+
+    private func updateDisplayLinkFrameRate() {
+        let fps = max(1, resolvedPreferredFramesPerSecond())
+        preferredFramesPerSecond = fps
+        displayLink?.preferredFramesPerSecond = fps
     }
 
     public override func layoutSubviews() {
@@ -677,6 +756,7 @@ public class MirageMetalView: MTKView {
             )
             if drawableSize != expectedDrawableSize {
                 drawableSize = expectedDrawableSize
+                needsRedraw = true
             }
         }
 
@@ -694,6 +774,7 @@ public class MirageMetalView: MTKView {
         // This prevents the orientation mismatch where stream starts at portrait but drawable is landscape
         if lastReportedDrawableSize.width == 0 && lastReportedDrawableSize.height == 0 {
             lastReportedDrawableSize = drawableSize
+            needsRedraw = true
             MirageLogger.renderer("Initial drawable size (immediate): \(drawableSize.width)x\(drawableSize.height) px")
             onDrawableSizeChanged?(drawableSize)
             return
@@ -715,44 +796,62 @@ public class MirageMetalView: MTKView {
         }
 
         lastReportedDrawableSize = drawableSize
+        needsRedraw = true
         MirageLogger.renderer("Drawable size changed: \(drawableSize.width)x\(drawableSize.height) px")
         onDrawableSizeChanged?(drawableSize)
-    }
-
-    /// Update with a new decoded frame
-    /// - Parameters:
-    ///   - pixelBuffer: The decoded video frame
-    ///   - contentRect: The region within the buffer containing actual content (for SCK black bar cropping)
-    public func updateFrame(_ pixelBuffer: CVPixelBuffer, contentRect: CGRect = .zero) {
-        currentTexture = renderer?.createTexture(from: pixelBuffer)
-        currentContentRect = contentRect
-        lastPixelBuffer = pixelBuffer
     }
 
     public override func draw(_ rect: CGRect) {
         // Pull-based frame update: read directly from global cache using stream ID
         // This completely bypasses Swift actor machinery that blocks during iOS gesture tracking.
         // CRITICAL: No closures, no weak references to @MainActor objects, just direct cache access.
-        if let id = streamID, let (pixelBuffer, contentRect) = MirageFrameCache.shared.get(for: id) {
+        if let id = streamID, let entry = MirageFrameCache.shared.getEntry(for: id) {
+            if entry.sequence == lastRenderedSequence && !needsRedraw {
+                return
+            }
+            let pixelBuffer = entry.pixelBuffer
+            let contentRect = entry.contentRect
             // Only create new texture if pixel buffer changed (pointer comparison)
             if pixelBuffer !== lastPixelBuffer {
                 currentTexture = renderer?.createTexture(from: pixelBuffer)
-                currentContentRect = contentRect
                 lastPixelBuffer = pixelBuffer
             }
-        } else if let (pixelBuffer, contentRect) = frameProvider?() {
-            // Legacy fallback for backwards compatibility
-            if pixelBuffer !== lastPixelBuffer {
-                currentTexture = renderer?.createTexture(from: pixelBuffer)
-                currentContentRect = contentRect
-                lastPixelBuffer = pixelBuffer
-            }
+            currentContentRect = contentRect
+            lastRenderedSequence = entry.sequence
+            needsRedraw = false
         }
 
         guard let drawable = currentDrawable,
               let texture = currentTexture else { return }
 
         renderer?.render(texture: texture, to: drawable, contentRect: currentContentRect)
+    }
+
+    private func applyRenderPreferences() {
+        let defaults = UserDefaults.standard
+        let enableDithering = defaults.object(forKey: "enableTemporalDithering") as? Bool ?? true
+        temporalDitheringEnabled = enableDithering
+
+        let proMotionEnabled = defaults.object(forKey: "enableProMotion") as? Bool ?? false
+        maxFramesPerSecondOverride = proMotionEnabled ? 120 : 60
+    }
+
+    private func startObservingPreferences() {
+        guard preferencesObserver == nil else { return }
+        preferencesObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyRenderPreferences()
+        }
+    }
+
+    private func stopObservingPreferences() {
+        if let observer = preferencesObserver {
+            NotificationCenter.default.removeObserver(observer)
+            preferencesObserver = nil
+        }
     }
 }
 
@@ -790,13 +889,16 @@ public class InputCapturingView: UIView {
     public var streamID: StreamID? {
         didSet {
             metalView.streamID = streamID
+            cursorSequence = 0
+            refreshCursorIfNeeded()
         }
     }
 
-    /// Legacy frame provider for backwards compatibility
-    public var frameProvider: (() -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)?)? {
+    /// Cursor store for pointer updates (decoupled from SwiftUI observation).
+    public var cursorStore: MirageClientCursorStore? {
         didSet {
-            metalView.frameProvider = frameProvider
+            cursorSequence = 0
+            refreshCursorIfNeeded()
         }
     }
 
@@ -811,6 +913,7 @@ public class InputCapturingView: UIView {
     private var currentCursorType: MirageCursorType = .arrow
     private var cursorIsVisible: Bool = true
     private var pointerInteraction: UIPointerInteraction?
+    private var cursorSequence: UInt64 = 0
 
     // Gesture recognizers
     private var tapGesture: UITapGestureRecognizer!
@@ -963,6 +1066,10 @@ public class InputCapturingView: UIView {
         // Add metal view to the scroll physics view's content view
         metalView.translatesAutoresizingMaskIntoConstraints = false
         scrollPhysicsView!.contentView.addSubview(metalView)
+
+        metalView.onFrameTick = { [weak self] in
+            self?.refreshCursorIfNeeded()
+        }
 
         // Add scroll physics view to self
         addSubview(scrollPhysicsView!)
@@ -1649,6 +1756,14 @@ public class InputCapturingView: UIView {
         // when the pointer enters a region, not when the underlying state changes
         pointerInteraction?.invalidate()
     }
+
+    private func refreshCursorIfNeeded() {
+        guard let cursorStore, let streamID else { return }
+        guard let snapshot = cursorStore.snapshot(for: streamID) else { return }
+        guard snapshot.sequence != cursorSequence else { return }
+        cursorSequence = snapshot.sequence
+        updateCursor(type: snapshot.cursorType, isVisible: snapshot.isVisible)
+    }
 }
 
 // MARK: - UIGestureRecognizerDelegate
@@ -1957,10 +2072,6 @@ private class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestur
 #if os(macOS)
 public struct MirageStreamViewRepresentable: NSViewRepresentable {
     public let streamID: StreamID
-    @Binding public var latestFrame: CVPixelBuffer?
-
-    /// The content rectangle within the frame (for SCK black bar cropping)
-    public var contentRect: CGRect
 
     /// Callback for sending input events to the host
     public var onInputEvent: ((MirageInputEvent) -> Void)?
@@ -1970,14 +2081,10 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
 
     public init(
         streamID: StreamID,
-        latestFrame: Binding<CVPixelBuffer?>,
-        contentRect: CGRect = .zero,
         onInputEvent: ((MirageInputEvent) -> Void)? = nil,
         onDrawableSizeChanged: ((CGSize) -> Void)? = nil
     ) {
         self.streamID = streamID
-        self._latestFrame = latestFrame
-        self.contentRect = contentRect
         self.onInputEvent = onInputEvent
         self.onDrawableSizeChanged = onDrawableSizeChanged
     }
@@ -2036,10 +2143,6 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
             metalView.streamID = streamID
         }
 
-        if let frame = latestFrame, let metalView = context.coordinator.metalView {
-            metalView.updateFrame(frame, contentRect: contentRect)
-            metalView.setNeedsDisplay(metalView.bounds)
-        }
     }
 
     public class Coordinator {
@@ -2063,10 +2166,6 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
 
 public struct MirageStreamViewRepresentable: UIViewRepresentable {
     public let streamID: StreamID
-    @Binding public var latestFrame: CVPixelBuffer?
-
-    /// The content rectangle within the frame (for SCK black bar cropping)
-    public var contentRect: CGRect
 
     /// Callback for sending input events to the host
     public var onInputEvent: ((MirageInputEvent) -> Void)?
@@ -2074,16 +2173,8 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
     /// Callback when drawable size changes - reports actual pixel dimensions
     public var onDrawableSizeChanged: ((CGSize) -> Void)?
 
-    /// Frame provider for pull-based frame updates during gesture tracking
-    /// When set, the Metal view will pull frames directly on each draw cycle,
-    /// bypassing SwiftUI's observation which gets blocked during gestures
-    public var frameProvider: (() -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)?)?
-
-    /// Current cursor type from host
-    public var cursorType: MirageCursorType
-
-    /// Whether cursor is visible (within host window bounds)
-    public var cursorVisible: Bool
+    /// Cursor store for pointer updates (decoupled from SwiftUI observation).
+    public var cursorStore: MirageClientCursorStore?
 
     /// Callback when app becomes active (returns from background).
     /// Used to trigger stream recovery after app switching.
@@ -2094,24 +2185,16 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
 
     public init(
         streamID: StreamID,
-        latestFrame: Binding<CVPixelBuffer?>,
-        contentRect: CGRect = .zero,
         onInputEvent: ((MirageInputEvent) -> Void)? = nil,
         onDrawableSizeChanged: ((CGSize) -> Void)? = nil,
-        frameProvider: (() -> (pixelBuffer: CVPixelBuffer, contentRect: CGRect)?)? = nil,
-        cursorType: MirageCursorType = .arrow,
-        cursorVisible: Bool = true,
+        cursorStore: MirageClientCursorStore? = nil,
         onBecomeActive: (() -> Void)? = nil,
         dockSnapEnabled: Bool = false
     ) {
         self.streamID = streamID
-        self._latestFrame = latestFrame
-        self.contentRect = contentRect
         self.onInputEvent = onInputEvent
         self.onDrawableSizeChanged = onDrawableSizeChanged
-        self.frameProvider = frameProvider
-        self.cursorType = cursorType
-        self.cursorVisible = cursorVisible
+        self.cursorStore = cursorStore
         self.onBecomeActive = onBecomeActive
         self.dockSnapEnabled = dockSnapEnabled
     }
@@ -2126,9 +2209,9 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
         view.onDrawableSizeChanged = context.coordinator.handleDrawableSizeChanged
         view.onBecomeActive = context.coordinator.handleBecomeActive
         view.dockSnapEnabled = dockSnapEnabled
+        view.cursorStore = cursorStore
         // Set stream ID for direct frame cache access (bypasses all actor machinery)
         view.streamID = streamID
-        view.frameProvider = frameProvider
         return view
     }
 
@@ -2142,18 +2225,8 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
         // CRITICAL: This allows Metal view to read frames without any Swift actor overhead
         uiView.streamID = streamID
 
-        // Legacy frame provider (not needed if using direct cache access)
-        uiView.frameProvider = frameProvider
-
         uiView.dockSnapEnabled = dockSnapEnabled
-
-        // Also push the frame via SwiftUI observation (works when not dragging)
-        if let frame = latestFrame {
-            uiView.metalView.updateFrame(frame, contentRect: contentRect)
-        }
-
-        // Update cursor appearance
-        uiView.updateCursor(type: cursorType, isVisible: cursorVisible)
+        uiView.cursorStore = cursorStore
     }
 
     public class Coordinator {
