@@ -2,91 +2,69 @@
 //  MirageHostService+SessionState.swift
 //  MirageKit
 //
-//  Created by Ethan Lipnik on 1/11/26.
+//  Created by Ethan Lipnik on 1/24/26.
+//
+//  Session state updates and window list delivery.
 //
 
 import Foundation
-import Security
 
 #if os(macOS)
-
-// MARK: - Session State Management
-
+@MainActor
 extension MirageHostService {
-    /// Start monitoring session state for lock/unlock detection
     func startSessionStateMonitoring() async {
-        sessionStateMonitor = SessionStateMonitor()
-        unlockManager = UnlockManager(sessionMonitor: sessionStateMonitor!)
-
-        // Generate initial session token
-        currentSessionToken = generateSessionToken()
-
-        // Get initial state
-        let initialState = await sessionStateMonitor!.refreshState()
-        sessionState = initialState
-
-        if sessionState.requiresUnlock, !clientsByConnection.isEmpty {
-            await startLoginDisplayStreamIfNeeded()
+        if sessionStateMonitor == nil {
+            sessionStateMonitor = SessionStateMonitor()
         }
 
-        // Start monitoring with callback
-        await sessionStateMonitor!.start { @Sendable [weak self] newState in
+        if unlockManager == nil, let sessionStateMonitor {
+            unlockManager = UnlockManager(sessionMonitor: sessionStateMonitor)
+        }
+
+        guard let sessionStateMonitor else { return }
+
+        await sessionStateMonitor.start { [weak self] newState in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                await self.handleSessionStateChange(newState)
+                await self?.handleSessionStateChange(newState)
             }
         }
 
-        MirageLogger.host("Session state monitoring started, initial state: \(sessionState)")
+        let refreshed = await sessionStateMonitor.refreshState(notify: false)
+        if refreshed != sessionState {
+            await handleSessionStateChange(refreshed)
+        }
     }
 
-    /// Handle session state change
+    func refreshSessionStateIfNeeded() async {
+        guard let sessionStateMonitor else { return }
+        let refreshed = await sessionStateMonitor.refreshState(notify: false)
+        if refreshed != sessionState {
+            await handleSessionStateChange(refreshed)
+        }
+    }
+
     func handleSessionStateChange(_ newState: HostSessionState) async {
-        let oldState = sessionState
         sessionState = newState
+        currentSessionToken = UUID().uuidString
 
-        // Generate new session token on state change
-        currentSessionToken = generateSessionToken()
-
-        MirageLogger.host("Session state changed: \(oldState) -> \(newState)")
-
-        // Notify delegate
         delegate?.hostService(self, sessionStateChanged: newState)
 
-        // Broadcast to all connected clients
-        await broadcastSessionState()
-
-        if newState.requiresUnlock {
-            if !clientsByConnection.isEmpty {
-                await startLoginDisplayStreamIfNeeded()
-            }
-        } else {
-            await stopLoginDisplayStream(newState: newState)
+        for clientContext in clientsByConnection.values {
+            await sendSessionState(to: clientContext)
         }
 
-        // If state changed to active (user logged in), send window list to all connected clients
-        if newState == .active && oldState != .active {
-            // Release unlock manager resources
-            if let unlockManager {
-                await unlockManager.releaseDisplayAssertion()
-            }
-
-            // Send window list to all connected clients
+        if newState == .active {
+            await stopLoginDisplayStream(newState: newState)
+            await unlockManager?.releaseDisplayAssertion()
             for clientContext in clientsByConnection.values {
                 await sendWindowList(to: clientContext)
             }
+        } else if !clientsByConnection.isEmpty {
+            await startLoginDisplayStreamIfNeeded()
         }
     }
 
-    /// Generate a cryptographically random session token
-    func generateSessionToken() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        return Data(bytes).base64EncodedString()
-    }
-
-    /// Broadcast current session state to all connected clients
-    func broadcastSessionState() async {
+    func sendSessionState(to clientContext: ClientContext) async {
         let message = SessionStateUpdateMessage(
             state: sessionState,
             sessionToken: currentSessionToken,
@@ -94,14 +72,21 @@ extension MirageHostService {
             timestamp: Date()
         )
 
-        for clientContext in clientsByConnection.values {
-            do {
-                try await clientContext.send(.sessionStateUpdate, content: message)
-            } catch {
-                MirageLogger.error(.host, "Failed to send session state to client: \(error)")
-            }
+        do {
+            try await clientContext.send(.sessionStateUpdate, content: message)
+        } catch {
+            MirageLogger.error(.host, "Failed to send session state: \(error)")
+        }
+    }
+
+    func sendWindowList(to clientContext: ClientContext) async {
+        do {
+            let windowList = WindowListMessage(windows: availableWindows)
+            try await clientContext.send(.windowList, content: windowList)
+            MirageLogger.host("Sent window list with \(availableWindows.count) windows")
+        } catch {
+            MirageLogger.error(.host, "Failed to send window list: \(error)")
         }
     }
 }
-
 #endif

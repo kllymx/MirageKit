@@ -29,7 +29,7 @@ actor SessionStateMonitor {
     private(set) var currentState: HostSessionState = .active
 
     /// Callback for state changes
-    private var onStateChange: ((HostSessionState) -> Void)?
+    private var onStateChange: (@Sendable (HostSessionState) -> Void)?
 
     /// Darwin notification tokens for cleanup
     private var notifyTokens: [Int32] = []
@@ -44,7 +44,7 @@ actor SessionStateMonitor {
 
     /// Start monitoring session state
     /// - Parameter onStateChange: Callback invoked when state changes (called on arbitrary queue)
-    func start(onStateChange: @escaping (HostSessionState) -> Void) {
+    func start(onStateChange: @escaping @Sendable (HostSessionState) -> Void) {
         guard !isMonitoring else { return }
         isMonitoring = true
         self.onStateChange = onStateChange

@@ -1,0 +1,41 @@
+//
+//  MessageTypes+Connection.swift
+//  MirageKit
+//
+//  Created by Ethan Lipnik on 1/24/26.
+//
+//  Message type definitions.
+//
+
+import Foundation
+
+// MARK: - Connection Messages
+
+struct HelloMessage: Codable {
+    let deviceID: UUID
+    let deviceName: String
+    let deviceType: DeviceType
+    let protocolVersion: Int
+    let capabilities: MirageHostCapabilities
+}
+
+struct HelloResponseMessage: Codable {
+    let accepted: Bool
+    let hostID: UUID
+    let hostName: String
+    let requiresAuth: Bool
+    let dataPort: UInt16
+}
+
+struct DisconnectMessage: Codable {
+    let reason: DisconnectReason
+    let message: String?
+
+    enum DisconnectReason: String, Codable {
+        case userRequested
+        case timeout
+        case error
+        case hostShutdown
+        case authFailed
+    }
+}

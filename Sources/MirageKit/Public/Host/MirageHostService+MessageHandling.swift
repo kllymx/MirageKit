@@ -1,0 +1,201 @@
+//
+//  MirageHostService+MessageHandling.swift
+//  MirageKit
+//
+//  Created by Ethan Lipnik on 1/24/26.
+//
+//  Control message routing.
+//
+
+import Foundation
+import Network
+
+#if os(macOS)
+@MainActor
+extension MirageHostService {
+    func handleClientMessage(_ message: ControlMessage, from client: MirageConnectedClient, connection: NWConnection) async {
+        MirageLogger.host("Received message type: \(message.type) from \(client.name)")
+        switch message.type {
+        case .startStream:
+            do {
+                let request = try message.decode(StartStreamMessage.self)
+                MirageLogger.host("Client requested stream for window \(request.windowID)")
+
+                await refreshSessionStateIfNeeded()
+                guard sessionState == .active else {
+                    MirageLogger.host("Rejecting startStream while session is \(sessionState)")
+                    if let clientContext = clientsByConnection[ObjectIdentifier(connection)] {
+                        await sendSessionState(to: clientContext)
+                    }
+                    return
+                }
+
+                guard let window = availableWindows.first(where: { $0.id == request.windowID }) else {
+                    MirageLogger.host("Window not found: \(request.windowID)")
+                    return
+                }
+
+                var clientDisplayResolution: CGSize?
+                if let displayWidth = request.displayWidth, let displayHeight = request.displayHeight,
+                   displayWidth > 0, displayHeight > 0 {
+                    clientDisplayResolution = CGSize(width: displayWidth, height: displayHeight)
+                    MirageLogger.host("Client display resolution: \(displayWidth)x\(displayHeight)")
+                }
+
+                if clientDisplayResolution == nil,
+                   let pixelWidth = request.pixelWidth, let pixelHeight = request.pixelHeight,
+                   pixelWidth > 0, pixelHeight > 0,
+                   let scaleFactor = request.scaleFactor, scaleFactor > 0 {
+                    let pointSize = CGSize(
+                        width: CGFloat(pixelWidth) / scaleFactor,
+                        height: CGFloat(pixelHeight) / scaleFactor
+                    )
+                    MirageLogger.host("Client initial size (legacy): \(pixelWidth)x\(pixelHeight) px -> \(pointSize) pts")
+                    onResizeWindowForStream?(window, pointSize)
+                }
+
+                let clientMaxRefreshRate = request.maxRefreshRate
+                let targetFrameRate = clientMaxRefreshRate >= 120 ? 120 : 60
+
+                let presetConfig = request.preferredQuality.encoderConfiguration(for: targetFrameRate)
+                let keyFrameInterval = request.keyFrameInterval ?? presetConfig.keyFrameInterval
+                let frameQuality = request.frameQuality ?? presetConfig.frameQuality
+                let keyframeQuality = request.keyframeQuality ?? presetConfig.keyframeQuality
+                let pixelFormat = request.pixelFormat ?? presetConfig.pixelFormat
+                let colorSpace = request.colorSpace ?? presetConfig.colorSpace
+                let minBitrate = request.minBitrate ?? presetConfig.minBitrate
+                let maxBitrate = request.maxBitrate ?? presetConfig.maxBitrate
+                let requestedScale = request.streamScale ?? 1.0
+                let adaptiveScaleEnabled = request.adaptiveScaleEnabled ?? true
+                MirageLogger.host("Frame rate: \(targetFrameRate)fps (quality=\(request.preferredQuality.displayName), client max=\(clientMaxRefreshRate)Hz)")
+
+                try await startStream(
+                    for: window,
+                    to: client,
+                    dataPort: request.dataPort,
+                    clientDisplayResolution: clientDisplayResolution,
+                    keyFrameInterval: keyFrameInterval,
+                    frameQuality: frameQuality,
+                    keyframeQuality: keyframeQuality,
+                    streamScale: requestedScale,
+                    adaptiveScaleEnabled: adaptiveScaleEnabled,
+                    qualityPreset: request.preferredQuality,
+                    targetFrameRate: targetFrameRate,
+                    pixelFormat: pixelFormat,
+                    colorSpace: colorSpace,
+                    captureQueueDepth: request.captureQueueDepth,
+                    minBitrate: minBitrate,
+                    maxBitrate: maxBitrate
+                )
+            } catch {
+                MirageLogger.error(.host, "Failed to handle startStream: \(error)")
+            }
+
+        case .displayResolutionChange:
+            do {
+                let request = try message.decode(DisplayResolutionChangeMessage.self)
+                MirageLogger.host("Client requested display resolution change for stream \(request.streamID): \(request.displayWidth)x\(request.displayHeight)")
+                await handleDisplayResolutionChange(
+                    streamID: request.streamID,
+                    newResolution: CGSize(width: request.displayWidth, height: request.displayHeight)
+                )
+            } catch {
+                MirageLogger.error(.host, "Failed to handle displayResolutionChange: \(error)")
+            }
+
+        case .streamScaleChange:
+            do {
+                let request = try message.decode(StreamScaleChangeMessage.self)
+                MirageLogger.host("Client requested stream scale change for stream \(request.streamID): \(request.streamScale)")
+                await handleStreamScaleChange(
+                    streamID: request.streamID,
+                    streamScale: request.streamScale,
+                    adaptiveScaleEnabled: request.adaptiveScaleEnabled
+                )
+            } catch {
+                MirageLogger.error(.host, "Failed to handle streamScaleChange: \(error)")
+            }
+
+        case .stopStream:
+            if let request = try? message.decode(StopStreamMessage.self) {
+                if let session = activeStreams.first(where: { $0.id == request.streamID }) {
+                    await stopStream(session, minimizeWindow: request.minimizeWindow)
+                }
+            }
+
+        case .keyframeRequest:
+            if let request = try? message.decode(KeyframeRequestMessage.self),
+               let context = streamsByID[request.streamID] {
+                await context.requestKeyframe()
+            }
+
+        case .ping:
+            let pong = ControlMessage(type: .pong)
+            connection.send(content: pong.serialize(), completion: .idempotent)
+
+        case .inputEvent:
+            do {
+                let inputMessage = try message.decode(InputEventMessage.self)
+                if case .windowResize(let resizeEvent) = inputMessage.event {
+                    MirageLogger.host("Received RESIZE event: \(resizeEvent.newSize) pts, scale: \(resizeEvent.scaleFactor), pixels: \(resizeEvent.pixelSize)")
+                }
+                if let session = activeStreams.first(where: { $0.id == inputMessage.streamID }) {
+                    delegate?.hostService(self, didReceiveInputEvent: inputMessage.event, forWindow: session.window, fromClient: client)
+                } else {
+                    MirageLogger.host("No session found for stream \(inputMessage.streamID)")
+                }
+            } catch {
+                MirageLogger.error(.host, "Failed to decode input event: \(error)")
+            }
+
+        case .disconnect:
+            if let disconnect = try? message.decode(DisconnectMessage.self) {
+                MirageLogger.host("Client \(client.name) disconnected: \(disconnect.reason.rawValue)")
+            } else {
+                MirageLogger.host("Client \(client.name) disconnected")
+            }
+            await disconnectClient(client)
+            delegate?.hostService(self, didDisconnectClient: client)
+
+        case .unlockRequest:
+            await handleUnlockRequest(message, from: client, connection: connection)
+
+        case .appListRequest:
+            await handleAppListRequest(message, from: client, connection: connection)
+
+        case .selectApp:
+            await handleSelectApp(message, from: client, connection: connection)
+
+        case .closeWindowRequest:
+            await handleCloseWindowRequest(message, from: client, connection: connection)
+
+        case .streamPaused:
+            await handleStreamPaused(message, from: client)
+
+        case .streamResumed:
+            await handleStreamResumed(message, from: client)
+
+        case .cancelCooldown:
+            await handleCancelCooldown(message, from: client, connection: connection)
+
+        case .menuActionRequest:
+            await handleMenuActionRequest(message, from: client, connection: connection)
+
+        case .startDesktopStream:
+            await handleStartDesktopStream(message, from: client, connection: connection)
+
+        case .stopDesktopStream:
+            await handleStopDesktopStream(message)
+
+        default:
+            MirageLogger.host("Unhandled message type: \(message.type)")
+        }
+    }
+
+    func sendVideoData(_ data: Data, header: FrameHeader, to client: MirageConnectedClient) async {
+        if let clientContext = clientsByConnection.values.first(where: { $0.client.id == client.id }) {
+            clientContext.sendVideoPacket(data)
+        }
+    }
+}
+#endif
