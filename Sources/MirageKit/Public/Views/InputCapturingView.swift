@@ -7,6 +7,9 @@
 
 #if os(iOS) || os(visionOS)
 import UIKit
+#if canImport(GameController)
+import GameController
+#endif
 
 /// A view that wraps MirageMetalView and captures all input events
 public class InputCapturingView: UIView {
@@ -103,6 +106,20 @@ public class InputCapturingView: UIView {
     var heldModifierKeys: Set<UIKeyboardHIDUsage> = []
     var capsLockEnabled: Bool = false
     var lastSentModifiers: MirageModifierFlags = []
+    var modifierRefreshTask: Task<Void, Never>?
+#if canImport(GameController)
+    static let hardwareModifierKeyCodes: Set<GCKeyCode> = [
+        .leftShift,
+        .rightShift,
+        .leftControl,
+        .rightControl,
+        .leftAlt,
+        .rightAlt,
+        .leftGUI,
+        .rightGUI,
+        .capsLock
+    ]
+#endif
 
     /// Get current modifier state from held keyboard keys
     var keyboardModifiers: MirageModifierFlags {
@@ -157,10 +174,90 @@ public class InputCapturingView: UIView {
     /// Clear all held modifiers with a snapshot update
     func resetAllModifiers() {
         guard !heldModifierKeys.isEmpty || capsLockEnabled else { return }
+        stopModifierRefresh()
         heldModifierKeys.removeAll()
         capsLockEnabled = false
         sendModifierStateIfNeeded(force: true)
     }
+
+    func startModifierRefreshIfNeeded() {
+        guard modifierRefreshTask == nil else { return }
+        modifierRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                guard self.refreshModifierStateFromHardware() else {
+                    self.modifierRefreshTask = nil
+                    return
+                }
+
+                if self.heldModifierKeys.isEmpty {
+                    self.modifierRefreshTask = nil
+                    return
+                }
+
+                do {
+                    try await Task.sleep(for: .milliseconds(150))
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    func stopModifierRefresh() {
+        modifierRefreshTask?.cancel()
+        modifierRefreshTask = nil
+    }
+
+    @discardableResult
+    func refreshModifierStateFromHardware() -> Bool {
+#if canImport(GameController)
+        guard let keyboardInput = GCKeyboard.coalesced?.keyboardInput else { return false }
+        var refreshedKeys: Set<UIKeyboardHIDUsage> = []
+
+        if keyboardInput.buttonInput(forKeyCode: .leftShift)?.isPressed == true {
+            refreshedKeys.insert(.keyboardLeftShift)
+        }
+        if keyboardInput.buttonInput(forKeyCode: .rightShift)?.isPressed == true {
+            refreshedKeys.insert(.keyboardRightShift)
+        }
+        if keyboardInput.buttonInput(forKeyCode: .leftControl)?.isPressed == true {
+            refreshedKeys.insert(.keyboardLeftControl)
+        }
+        if keyboardInput.buttonInput(forKeyCode: .rightControl)?.isPressed == true {
+            refreshedKeys.insert(.keyboardRightControl)
+        }
+        if keyboardInput.buttonInput(forKeyCode: .leftAlt)?.isPressed == true {
+            refreshedKeys.insert(.keyboardLeftAlt)
+        }
+        if keyboardInput.buttonInput(forKeyCode: .rightAlt)?.isPressed == true {
+            refreshedKeys.insert(.keyboardRightAlt)
+        }
+        if keyboardInput.buttonInput(forKeyCode: .leftGUI)?.isPressed == true {
+            refreshedKeys.insert(.keyboardLeftGUI)
+        }
+        if keyboardInput.buttonInput(forKeyCode: .rightGUI)?.isPressed == true {
+            refreshedKeys.insert(.keyboardRightGUI)
+        }
+
+        guard refreshedKeys != heldModifierKeys else { return true }
+        heldModifierKeys = refreshedKeys
+        sendModifierStateIfNeeded(force: true)
+        return true
+#else
+        return false
+#endif
+    }
+
+#if canImport(GameController)
+    func installHardwareKeyboardHandler() {
+        HardwareKeyboardCoordinator.shared.register(self)
+    }
+
+    func uninstallHardwareKeyboardHandler() {
+        HardwareKeyboardCoordinator.shared.unregister(self)
+    }
+#endif
 
     // Double-click detection state (left click)
     var lastTapTime: TimeInterval = 0
@@ -314,6 +411,23 @@ public class InputCapturingView: UIView {
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
+
+#if canImport(GameController)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardDidConnect(_:)),
+            name: .GCKeyboardDidConnect,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardDidDisconnect(_:)),
+            name: .GCKeyboardDidDisconnect,
+            object: nil
+        )
+
+        installHardwareKeyboardHandler()
+#endif
     }
 
     @objc private func appWillResignActive() {
@@ -332,10 +446,26 @@ public class InputCapturingView: UIView {
         }
 
         sendModifierStateIfNeeded(force: true)
+#if canImport(GameController)
+        installHardwareKeyboardHandler()
+#endif
 
         // Notify SwiftUI layer to trigger stream recovery
         onBecomeActive?()
     }
+
+#if canImport(GameController)
+    @objc private func keyboardDidConnect(_ notification: Notification) {
+        installHardwareKeyboardHandler()
+        refreshModifierStateFromHardware()
+    }
+
+    @objc private func keyboardDidDisconnect(_ notification: Notification) {
+        HardwareKeyboardCoordinator.shared.handleKeyboardDisconnect()
+        stopModifierRefresh()
+        resetAllModifiers()
+    }
+#endif
 
     public override var canBecomeFirstResponder: Bool { true }
 
@@ -354,10 +484,65 @@ public class InputCapturingView: UIView {
     }
 
     deinit {
+        stopModifierRefresh()
+#if canImport(GameController)
+        uninstallHardwareKeyboardHandler()
+#endif
         if let registeredCursorStreamID {
             MirageCursorUpdateRouter.shared.unregister(streamID: registeredCursorStreamID)
         }
         NotificationCenter.default.removeObserver(self)
     }
 }
+
+#if canImport(GameController)
+@MainActor
+private final class HardwareKeyboardCoordinator {
+    static let shared = HardwareKeyboardCoordinator()
+
+    private let views = NSHashTable<InputCapturingView>.weakObjects()
+    private var installedKeyboardInputID: ObjectIdentifier?
+
+    func register(_ view: InputCapturingView) {
+        views.add(view)
+        installHandlerIfNeeded()
+    }
+
+    func unregister(_ view: InputCapturingView) {
+        views.remove(view)
+    }
+
+    func handleKeyboardDisconnect() {
+        installedKeyboardInputID = nil
+    }
+
+    private func installHandlerIfNeeded() {
+        guard let keyboardInput = GCKeyboard.coalesced?.keyboardInput else { return }
+        let inputID = ObjectIdentifier(keyboardInput)
+        guard installedKeyboardInputID != inputID else { return }
+
+        keyboardInput.keyChangedHandler = { [weak self] _, _, keyCode, _ in
+            guard InputCapturingView.hardwareModifierKeyCodes.contains(keyCode) else { return }
+            Task { @MainActor [weak self] in
+                self?.handleModifierKeyChange()
+            }
+        }
+
+        installedKeyboardInputID = inputID
+    }
+
+    private func handleModifierKeyChange() {
+        for view in views.allObjects {
+            guard view.window?.isKeyWindow == true, view.isFirstResponder else { continue }
+            guard view.refreshModifierStateFromHardware() else { continue }
+
+            if view.heldModifierKeys.isEmpty {
+                view.stopModifierRefresh()
+            } else {
+                view.startModifierRefreshIfNeeded()
+            }
+        }
+    }
+}
+#endif
 #endif

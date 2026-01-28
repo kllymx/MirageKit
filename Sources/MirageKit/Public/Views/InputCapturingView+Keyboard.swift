@@ -62,6 +62,14 @@ extension InputCapturingView {
         }
     }
 
+    private func updateModifierRefreshTimer() {
+        if heldModifierKeys.isEmpty {
+            stopModifierRefresh()
+        } else {
+            startModifierRefreshIfNeeded()
+        }
+    }
+
     public override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses {
             guard let key = press.key else { continue }
@@ -90,6 +98,7 @@ extension InputCapturingView {
                 }
             }
         }
+        updateModifierRefreshTimer()
         // Don't call super - we handle all key events
     }
 
@@ -121,6 +130,7 @@ extension InputCapturingView {
                 }
             }
         }
+        updateModifierRefreshTimer()
     }
 
     public override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -151,6 +161,7 @@ extension InputCapturingView {
                 }
             }
         }
+        updateModifierRefreshTimer()
     }
 
     public override func pressesChanged(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -279,6 +290,8 @@ extension InputCapturingView {
             modifiers: eventModifiers
         )
         onInputEvent?(.keyUp(keyUpEvent))
+
+        updateModifierRefreshTimer()
     }
 
     /// Convert a character to macOS virtual key code
