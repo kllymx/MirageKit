@@ -27,8 +27,8 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
     /// The actual content we display (stays pinned to bounds)
     let contentView: UIView
 
-    /// Callback for scroll events: (deltaX, deltaY, phase, momentumPhase, location)
-    var onScroll: ((CGFloat, CGFloat, MirageScrollPhase, MirageScrollPhase, CGPoint?) -> Void)?
+    /// Callback for scroll events: (deltaX, deltaY, phase, momentumPhase)
+    var onScroll: ((CGFloat, CGFloat, MirageScrollPhase, MirageScrollPhase) -> Void)?
 
     /// Callback for pinch events: (magnification, phase)
     var onPinch: ((CGFloat, MirageScrollPhase) -> Void)?
@@ -44,9 +44,6 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
 
     /// Last content offset for calculating deltas
     private var lastContentOffset: CGPoint = .zero
-
-    /// Last known pan location while tracking (used to target scroll injection)
-    private var lastPanLocation: CGPoint?
 
     /// Flag to suppress scroll events during recenter operation
     private var isRecentering = false
@@ -86,7 +83,6 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
         scrollView.bounces = true
         scrollView.alwaysBounceVertical = true
         scrollView.alwaysBounceHorizontal = true
-        scrollView.isDirectionalLockEnabled = false
         scrollView.decelerationRate = .normal
         scrollView.contentInsetAdjustmentBehavior = .never
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -99,7 +95,6 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
         scrollView.panGestureRecognizer.allowedTouchTypes = [
             NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)
         ]
-        scrollView.panGestureRecognizer.allowedScrollTypesMask = [.continuous]
 
         // Add scroll content (large enough to allow scrolling in all directions)
         scrollContent.translatesAutoresizingMaskIntoConstraints = false
@@ -168,22 +163,14 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
         }
     }
 
-    /// Best-effort pointer location during a trackpad scroll gesture.
-    private func currentPanLocation() -> CGPoint? {
-        let location = scrollView.panGestureRecognizer.location(in: self)
-        guard bounds.contains(location) else { return lastPanLocation }
-        return location
-    }
-
     // MARK: - UIScrollViewDelegate
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         isTracking = true
         lastContentOffset = scrollView.contentOffset
-        lastPanLocation = currentPanLocation()
 
         // Send scroll began phase
-        onScroll?(0, 0, .began, .none, lastPanLocation)
+        onScroll?(0, 0, .began, .none)
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -199,13 +186,10 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
         // Determine phases based on tracking/decelerating state
         let phase: MirageScrollPhase = isTracking ? .changed : .none
         let momentumPhase: MirageScrollPhase = scrollView.isDecelerating ? .changed : .none
-        if isTracking {
-            lastPanLocation = currentPanLocation()
-        }
 
         // Send scroll delta if there's actual movement
         if deltaX != 0 || deltaY != 0 {
-            onScroll?(deltaX, deltaY, phase, momentumPhase, lastPanLocation)
+            onScroll?(deltaX, deltaY, phase, momentumPhase)
         }
     }
 
@@ -214,16 +198,14 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
 
         if !decelerate {
             // No momentum, end immediately and recenter
-            onScroll?(0, 0, .ended, .none, lastPanLocation)
-            lastPanLocation = nil
+            onScroll?(0, 0, .ended, .none)
             recenterIfNeeded()
         }
     }
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         // Momentum ended, send final event and recenter
-        onScroll?(0, 0, .none, .ended, lastPanLocation)
-        lastPanLocation = nil
+        onScroll?(0, 0, .none, .ended)
         recenterIfNeeded()
     }
 

@@ -164,8 +164,7 @@ public struct MirageStreamContentView: View {
         }
 #endif
         if case .scrollWheel(let scrollEvent) = event {
-            let targetFrameRate = resolvedStreamTargetFrameRate()
-            scrollInputSampler.handle(scrollEvent, targetFrameRate: targetFrameRate) { resampledEvent in
+            scrollInputSampler.handle(scrollEvent) { resampledEvent in
                 clientService.sendInputFireAndForget(.scrollWheel(resampledEvent), forStream: session.streamID)
             }
             return
@@ -173,26 +172,22 @@ public struct MirageStreamContentView: View {
 
         switch event {
         case .mouseMoved(let mouseEvent):
-            let targetFrameRate = resolvedStreamTargetFrameRate()
-            pointerInputSampler.handle(kind: .move, event: mouseEvent, targetFrameRate: targetFrameRate) { resampledEvent in
+            pointerInputSampler.handle(kind: .move, event: mouseEvent) { resampledEvent in
                 clientService.sendInputFireAndForget(.mouseMoved(resampledEvent), forStream: session.streamID)
             }
             return
         case .mouseDragged(let mouseEvent):
-            let targetFrameRate = resolvedStreamTargetFrameRate()
-            pointerInputSampler.handle(kind: .leftDrag, event: mouseEvent, targetFrameRate: targetFrameRate) { resampledEvent in
+            pointerInputSampler.handle(kind: .leftDrag, event: mouseEvent) { resampledEvent in
                 clientService.sendInputFireAndForget(.mouseDragged(resampledEvent), forStream: session.streamID)
             }
             return
         case .rightMouseDragged(let mouseEvent):
-            let targetFrameRate = resolvedStreamTargetFrameRate()
-            pointerInputSampler.handle(kind: .rightDrag, event: mouseEvent, targetFrameRate: targetFrameRate) { resampledEvent in
+            pointerInputSampler.handle(kind: .rightDrag, event: mouseEvent) { resampledEvent in
                 clientService.sendInputFireAndForget(.rightMouseDragged(resampledEvent), forStream: session.streamID)
             }
             return
         case .otherMouseDragged(let mouseEvent):
-            let targetFrameRate = resolvedStreamTargetFrameRate()
-            pointerInputSampler.handle(kind: .otherDrag, event: mouseEvent, targetFrameRate: targetFrameRate) { resampledEvent in
+            pointerInputSampler.handle(kind: .otherDrag, event: mouseEvent) { resampledEvent in
                 clientService.sendInputFireAndForget(.otherMouseDragged(resampledEvent), forStream: session.streamID)
             }
             return
@@ -203,14 +198,6 @@ public struct MirageStreamContentView: View {
         }
 
         clientService.sendInputFireAndForget(event, forStream: session.streamID)
-    }
-
-    private func resolvedStreamTargetFrameRate() -> Int {
-        let snapshot = clientService.metricsStore.snapshot(for: session.streamID)
-        let hostTarget = snapshot?.hostTargetFrameRate ?? 0
-        let fallbackTarget = 60
-        let resolved = hostTarget > 0 ? hostTarget : fallbackTarget
-        return MirageInputSampling.clampedTargetFrameRate(resolved)
     }
 
     private func handleDrawableMetricsChanged(_ metrics: MirageDrawableMetrics) {
@@ -280,35 +267,12 @@ public struct MirageStreamContentView: View {
 #endif
 }
 
-enum MirageInputSampling {
-    static let minimumFrameRate = 30
-    static let maximumFrameRate = 120
-
-    static func clampedTargetFrameRate(_ targetFrameRate: Int) -> Int {
-        min(maximumFrameRate, max(minimumFrameRate, targetFrameRate))
-    }
-
-    static func outputInterval(for targetFrameRate: Int) -> TimeInterval {
-        1.0 / TimeInterval(clampedTargetFrameRate(targetFrameRate))
-    }
-
-    static func synthesisThreshold(
-        outputInterval: TimeInterval,
-        lastRawDeltaInterval: TimeInterval,
-        multiplier: TimeInterval
-    ) -> TimeInterval {
-        let cadenceInterval = max(outputInterval, lastRawDeltaInterval)
-        return cadenceInterval * multiplier
-    }
-}
-
 @MainActor
 private final class ScrollInputSampler {
-    private var outputInterval: TimeInterval = 1.0 / 60.0
+    private let outputInterval: TimeInterval = 1.0 / 120.0
     private let decayDelay: TimeInterval = 0.03
     private let decayFactor: CGFloat = 0.85
     private let rateThreshold: CGFloat = 2.0
-    private let synthDelayMultiplier: TimeInterval = 1.5
 
     private var scrollRateX: CGFloat = 0
     private var scrollRateY: CGFloat = 0
@@ -318,15 +282,8 @@ private final class ScrollInputSampler {
     private var lastIsPrecise: Bool = true
     private var lastMomentumPhase: MirageScrollPhase = .none
     private var scrollTimer: DispatchSourceTimer?
-    private var lastRawSendTime: TimeInterval = 0
-    private var lastRawDeltaInterval: TimeInterval = 0
 
-    func handle(
-        _ event: MirageScrollEvent,
-        targetFrameRate: Int,
-        send: @escaping (MirageScrollEvent) -> Void
-    ) {
-        updateTargetFrameRate(targetFrameRate, send: send)
+    func handle(_ event: MirageScrollEvent, send: @escaping (MirageScrollEvent) -> Void) {
         lastLocation = event.location
         lastModifiers = event.modifiers
         lastIsPrecise = event.isPrecise
@@ -340,10 +297,6 @@ private final class ScrollInputSampler {
         }
 
         if event.deltaX != 0 || event.deltaY != 0 {
-            // Send raw deltas immediately to avoid losing small horizontal deltas.
-            let rawSendTime = CACurrentMediaTime()
-            send(event)
-            recordRawSendTime(rawSendTime)
             applyDelta(event, send: send)
         }
 
@@ -358,8 +311,6 @@ private final class ScrollInputSampler {
         scrollTimer = nil
         resetRate()
         lastMomentumPhase = .none
-        lastRawDeltaInterval = 0
-        lastRawSendTime = 0
     }
 
     private func applyDelta(_ event: MirageScrollEvent, send: @escaping (MirageScrollEvent) -> Void) {
@@ -392,15 +343,6 @@ private final class ScrollInputSampler {
     private func tick(send: @escaping (MirageScrollEvent) -> Void) {
         let now = CACurrentMediaTime()
         let timeSinceInput = now - lastScrollTime
-        let timeSinceRawSend = now - lastRawSendTime
-
-        // Only synthesize deltas when input cadence drops below the most recent raw cadence.
-        let synthesisThreshold = MirageInputSampling.synthesisThreshold(
-            outputInterval: outputInterval,
-            lastRawDeltaInterval: lastRawDeltaInterval,
-            multiplier: synthDelayMultiplier
-        )
-        guard lastRawSendTime > 0, timeSinceRawSend > synthesisThreshold else { return }
 
         if timeSinceInput > decayDelay {
             scrollRateX *= decayFactor
@@ -437,28 +379,6 @@ private final class ScrollInputSampler {
         lastScrollTime = CACurrentMediaTime()
     }
 
-    private func updateTargetFrameRate(_ targetFrameRate: Int, send: @escaping (MirageScrollEvent) -> Void) {
-        let clampedTarget = MirageInputSampling.clampedTargetFrameRate(targetFrameRate)
-        let newOutputInterval = MirageInputSampling.outputInterval(for: clampedTarget)
-        guard abs(newOutputInterval - outputInterval) > 0.000_5 else { return }
-        outputInterval = newOutputInterval
-        if scrollTimer != nil {
-            scrollTimer?.cancel()
-            scrollTimer = nil
-            startTimer(send: send)
-        }
-    }
-
-    private func recordRawSendTime(_ now: TimeInterval) {
-        if lastRawSendTime > 0 {
-            let dt = max(0.004, min(now - lastRawSendTime, 0.2))
-            lastRawDeltaInterval = dt
-        } else {
-            lastRawDeltaInterval = outputInterval
-        }
-        lastRawSendTime = now
-    }
-
     private func phaseEvent(from event: MirageScrollEvent) -> MirageScrollEvent {
         MirageScrollEvent(
             deltaX: 0,
@@ -481,7 +401,7 @@ private final class PointerInputSampler {
         case otherDrag
     }
 
-    private var outputInterval: TimeInterval = 1.0 / 60.0
+    private let outputInterval: TimeInterval = 1.0 / 120.0
     private let idleTimeout: TimeInterval = 0.05
 
     private var lastEvent: MirageMouseEvent?
@@ -489,13 +409,7 @@ private final class PointerInputSampler {
     private var lastInputTime: TimeInterval = 0
     private var timer: DispatchSourceTimer?
 
-    func handle(
-        kind: Kind,
-        event: MirageMouseEvent,
-        targetFrameRate: Int,
-        send: @escaping (MirageMouseEvent) -> Void
-    ) {
-        updateTargetFrameRate(targetFrameRate, send: send)
+    func handle(kind: Kind, event: MirageMouseEvent, send: @escaping (MirageMouseEvent) -> Void) {
         lastEvent = event
         lastKind = kind
         lastInputTime = CACurrentMediaTime()
@@ -540,17 +454,5 @@ private final class PointerInputSampler {
         }
 
         send(event)
-    }
-
-    private func updateTargetFrameRate(_ targetFrameRate: Int, send: @escaping (MirageMouseEvent) -> Void) {
-        let clampedTarget = MirageInputSampling.clampedTargetFrameRate(targetFrameRate)
-        let newOutputInterval = MirageInputSampling.outputInterval(for: clampedTarget)
-        guard abs(newOutputInterval - outputInterval) > 0.000_5 else { return }
-        outputInterval = newOutputInterval
-        if timer != nil {
-            timer?.cancel()
-            timer = nil
-            startTimer(send: send)
-        }
     }
 }

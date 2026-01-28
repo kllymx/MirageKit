@@ -22,8 +22,8 @@ extension MirageHostInputController {
 
         let timer = DispatchSource.makeTimerSource(queue: accessibilityQueue)
         timer.schedule(
-            deadline: .now() + modifierStuckTimeoutSeconds,
-            repeating: modifierStuckTimeoutSeconds
+            deadline: .now() + modifierResetPollIntervalSeconds,
+            repeating: modifierResetPollIntervalSeconds
         )
         timer.setEventHandler { [weak self] in
             self?.checkForStuckModifiers()
