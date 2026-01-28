@@ -578,10 +578,15 @@ final class MetalRenderer {
             }
 
             let completionOnce = CompletionOnce(completion)
+            #if os(macOS)
             // Prefer presentation timing so scheduler release tracks drawable availability.
             drawable.addPresentedHandler { _ in completionOnce.fire() }
             // Fall back to GPU completion if presentation callbacks are delayed or skipped.
             commandBuffer.addCompletedHandler { _ in completionOnce.fire() }
+            #else
+            // iOS/visionOS: use GPU completion timing (addPresentedHandler not available).
+            commandBuffer.addCompletedHandler { _ in completionOnce.fire() }
+            #endif
         }
         commandBuffer.commit()
     }

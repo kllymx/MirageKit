@@ -61,7 +61,7 @@ public struct MirageStreamContentView: View {
 
     public var body: some View {
         Group {
-#if os(iOS)
+#if os(iOS) || os(visionOS)
             MirageStreamViewRepresentable(
                 streamID: session.streamID,
                 onInputEvent: { event in
@@ -242,7 +242,7 @@ public struct MirageStreamContentView: View {
         }
     }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
     private func scheduleResizeHoldoff() {
         resizeHoldoffTask?.cancel()
         allowsResizeEvents = false
