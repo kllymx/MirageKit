@@ -88,21 +88,11 @@ extension MirageHostService {
             }
         }
 
-        MirageLogger.host("Requesting approval for \(deviceInfo.name) (\(deviceInfo.deviceType.displayName))...")
-
-        let shouldAccept: Bool = await withCheckedContinuation { continuation in
-            let box = SafeContinuationBox<Bool>(continuation)
-            if let delegate {
-                delegate.hostService(self, shouldAcceptConnectionFrom: deviceInfo) { accepted in
-                    box.resume(returning: accepted)
-                }
-            } else {
-                box.resume(returning: true)
-            }
-        }
+        // Evaluate trust using provider first, then fall back to delegate
+        let shouldAccept: Bool = await evaluateTrustAndApproval(for: deviceInfo)
 
         guard shouldAccept else {
-            MirageLogger.host("Connection rejected by user")
+            MirageLogger.host("Connection rejected")
             connection.cancel()
             return
         }
@@ -183,11 +173,61 @@ extension MirageHostService {
                 id: hello.deviceID,
                 name: hello.deviceName,
                 deviceType: hello.deviceType,
-                endpoint: endpoint
+                endpoint: endpoint,
+                iCloudUserID: hello.iCloudUserID
             )
         } catch {
             MirageLogger.error(.host, "Failed to decode hello: \(error)")
             return MirageDeviceInfo(name: "Unknown Device", deviceType: .unknown, endpoint: endpoint)
+        }
+    }
+
+    /// Evaluates trust using the provider and falls back to delegate approval if needed.
+    private func evaluateTrustAndApproval(for deviceInfo: MirageDeviceInfo) async -> Bool {
+        // If a trust provider is set, consult it first
+        if let trustProvider {
+            let peerIdentity = MiragePeerIdentity(
+                deviceID: deviceInfo.id,
+                name: deviceInfo.name,
+                deviceType: deviceInfo.deviceType,
+                iCloudUserID: deviceInfo.iCloudUserID,
+                endpoint: deviceInfo.endpoint
+            )
+
+            let decision = await trustProvider.evaluateTrust(for: peerIdentity)
+
+            switch decision {
+            case .trusted:
+                MirageLogger.host("Connection auto-approved by trust provider for \(deviceInfo.name)")
+                return true
+
+            case .denied:
+                MirageLogger.host("Connection denied by trust provider for \(deviceInfo.name)")
+                return false
+
+            case .requiresApproval:
+                MirageLogger.host("Trust provider requires approval for \(deviceInfo.name)")
+                // Fall through to delegate
+
+            case .unavailable(let reason):
+                MirageLogger.host("Trust provider unavailable (\(reason)), falling back to delegate for \(deviceInfo.name)")
+                // Fall through to delegate
+            }
+        }
+
+        // Fall back to delegate-based approval
+        MirageLogger.host("Requesting approval for \(deviceInfo.name) (\(deviceInfo.deviceType.displayName))...")
+
+        return await withCheckedContinuation { continuation in
+            let box = SafeContinuationBox<Bool>(continuation)
+            if let delegate {
+                delegate.hostService(self, shouldAcceptConnectionFrom: deviceInfo) { accepted in
+                    box.resume(returning: accepted)
+                }
+            } else {
+                // No delegate and no trust provider decision - accept by default
+                box.resume(returning: true)
+            }
         }
     }
 

@@ -21,15 +21,20 @@ public struct MirageDeviceInfo: Identifiable, Sendable {
     /// Network endpoint description (IP address/hostname)
     public let endpoint: String
 
+    /// iCloud user record ID for trust evaluation, if available.
+    public let iCloudUserID: String?
+
     public init(
         id: UUID = UUID(),
         name: String,
         deviceType: DeviceType,
-        endpoint: String
+        endpoint: String,
+        iCloudUserID: String? = nil
     ) {
         self.id = id
         self.name = name
         self.deviceType = deviceType
         self.endpoint = endpoint
+        self.iCloudUserID = iCloudUserID
     }
 }

@@ -124,6 +124,10 @@ public final class MirageClientService {
     /// Client delegate for events
     public weak var delegate: MirageClientDelegate?
 
+    /// iCloud user record ID to send during connection handshake.
+    /// Set this before calling connect(to:) to enable iCloud-based auto-trust.
+    public var iCloudUserID: String?
+
     /// Session store for UI state and stream coordination.
     public let sessionStore: MirageClientSessionStore
     /// Metrics store for stream telemetry (decoupled from SwiftUI).

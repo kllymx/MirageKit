@@ -42,6 +42,13 @@ public final class MirageHostService {
     /// Host delegate for events
     public weak var delegate: MirageHostDelegate?
 
+    /// Trust provider for custom connection approval logic.
+    /// When set, the provider is consulted before the delegate for connection approval.
+    /// If the provider returns `.trusted`, the connection is auto-approved.
+    /// If the provider returns `.requiresApproval` or `.unavailable`, the delegate is consulted.
+    /// If the provider returns `.denied`, the connection is rejected immediately.
+    public weak var trustProvider: (any MirageTrustProvider)?
+
     /// Accessibility permission manager for input injection.
     public let permissionManager = MirageAccessibilityPermissionManager()
 

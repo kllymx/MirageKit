@@ -50,7 +50,8 @@ extension MirageClientService {
                 supportsP3ColorSpace: true,
                 maxFrameRate: 120,
                 protocolVersion: Int(MirageKit.protocolVersion)
-            )
+            ),
+            iCloudUserID: iCloudUserID
         )
 
         do {

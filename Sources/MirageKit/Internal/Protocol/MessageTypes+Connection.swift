@@ -17,6 +17,24 @@ struct HelloMessage: Codable {
     let deviceType: DeviceType
     let protocolVersion: Int
     let capabilities: MirageHostCapabilities
+    /// iCloud user record ID for trust evaluation, if available.
+    let iCloudUserID: String?
+
+    init(
+        deviceID: UUID,
+        deviceName: String,
+        deviceType: DeviceType,
+        protocolVersion: Int,
+        capabilities: MirageHostCapabilities,
+        iCloudUserID: String? = nil
+    ) {
+        self.deviceID = deviceID
+        self.deviceName = deviceName
+        self.deviceType = deviceType
+        self.protocolVersion = protocolVersion
+        self.capabilities = capabilities
+        self.iCloudUserID = iCloudUserID
+    }
 }
 
 struct HelloResponseMessage: Codable {
