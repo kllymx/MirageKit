@@ -76,7 +76,7 @@ public final class MirageCloudKitShareManager: Sendable {
     ///
     /// Call this after the CloudKit manager is initialized to set up sharing.
     public func setup() async {
-        guard cloudKitManager.isAvailable else { return }
+        guard cloudKitManager.isAvailable, let container = cloudKitManager.container else { return }
 
         isLoading = true
         defer { isLoading = false }
@@ -84,7 +84,7 @@ public final class MirageCloudKitShareManager: Sendable {
         do {
             // Create zone if needed
             let zone = CKRecordZone(zoneID: hostZoneID)
-            _ = try await cloudKitManager.container.privateCloudDatabase.modifyRecordZones(
+            _ = try await container.privateCloudDatabase.modifyRecordZones(
                 saving: [zone],
                 deleting: []
             )
@@ -107,7 +107,9 @@ public final class MirageCloudKitShareManager: Sendable {
 
     /// Fetches or creates the host record.
     private func fetchHostRecord() async {
-        let database = cloudKitManager.container.privateCloudDatabase
+        guard let container = cloudKitManager.container else { return }
+
+        let database = container.privateCloudDatabase
 
         // Query for existing host record
         let query = CKQuery(
@@ -136,7 +138,11 @@ public final class MirageCloudKitShareManager: Sendable {
 
     /// Creates a new host record for sharing.
     private func createHostRecord() async throws -> CKRecord {
-        let database = cloudKitManager.container.privateCloudDatabase
+        guard let container = cloudKitManager.container else {
+            throw MirageCloudKitError.containerUnavailable
+        }
+
+        let database = container.privateCloudDatabase
 
         #if os(macOS)
         let hostName = Host.current().localizedName ?? "Mac"
@@ -160,6 +166,112 @@ public final class MirageCloudKitShareManager: Sendable {
         return savedRecord
     }
 
+    // MARK: - Host Registration
+
+    /// Registers or updates the host in CloudKit with full metadata.
+    ///
+    /// Call this when the host app launches to ensure the host record
+    /// is up-to-date with current name, capabilities, and last-seen time.
+    ///
+    /// - Parameters:
+    ///   - deviceID: Stable device identifier.
+    ///   - name: Display name for the host.
+    ///   - capabilities: Host capabilities (HEVC, frame rate, etc.).
+    public func registerHost(
+        deviceID: UUID,
+        name: String,
+        capabilities: MirageHostCapabilities
+    ) async throws {
+        guard cloudKitManager.isAvailable, let container = cloudKitManager.container else {
+            MirageLogger.appState("CloudKit unavailable, skipping host registration")
+            return
+        }
+
+        let database = container.privateCloudDatabase
+
+        // First ensure zone exists
+        let zone = CKRecordZone(zoneID: hostZoneID)
+        do {
+            _ = try await database.modifyRecordZones(saving: [zone], deleting: [])
+        } catch {
+            // Zone may already exist, continue
+            MirageLogger.appState("Zone creation returned: \(error.localizedDescription)")
+        }
+
+        // Query for existing host record with this device ID
+        let predicate = NSPredicate(format: "deviceID == %@", deviceID.uuidString)
+        let query = CKQuery(
+            recordType: cloudKitManager.configuration.hostRecordType,
+            predicate: predicate
+        )
+
+        var existingRecord: CKRecord?
+        do {
+            let (results, _) = try await database.records(matching: query, inZoneWith: hostZoneID)
+            for (_, result) in results {
+                if case .success(let record) = result {
+                    existingRecord = record
+                    break
+                }
+            }
+        } catch {
+            MirageLogger.error(.appState, "Failed to query existing host record: \(error)")
+        }
+
+        // Create or update record
+        let record: CKRecord
+        if let existing = existingRecord {
+            record = existing
+        } else {
+            let recordID = CKRecord.ID(recordName: deviceID.uuidString, zoneID: hostZoneID)
+            record = CKRecord(recordType: cloudKitManager.configuration.hostRecordType, recordID: recordID)
+            record[MirageCloudKitHostInfo.RecordKey.createdAt.rawValue] = Date()
+        }
+
+        // Update all fields
+        record[MirageCloudKitHostInfo.RecordKey.deviceID.rawValue] = deviceID.uuidString
+        record[MirageCloudKitHostInfo.RecordKey.name.rawValue] = name
+        record[MirageCloudKitHostInfo.RecordKey.deviceType.rawValue] = DeviceType.mac.rawValue
+        record[MirageCloudKitHostInfo.RecordKey.maxFrameRate.rawValue] = Int64(capabilities.maxFrameRate)
+        record[MirageCloudKitHostInfo.RecordKey.supportsHEVC.rawValue] = capabilities.supportsHEVC ? 1 : 0
+        record[MirageCloudKitHostInfo.RecordKey.supportsP3.rawValue] = capabilities.supportsP3ColorSpace ? 1 : 0
+        record[MirageCloudKitHostInfo.RecordKey.maxStreams.rawValue] = Int64(capabilities.maxStreams)
+        record[MirageCloudKitHostInfo.RecordKey.protocolVersion.rawValue] = Int64(capabilities.protocolVersion)
+        record[MirageCloudKitHostInfo.RecordKey.lastSeen.rawValue] = Date()
+
+        do {
+            let (saveResults, _) = try await database.modifyRecords(
+                saving: [record],
+                deleting: [],
+                savePolicy: .changedKeys
+            )
+            if let savedRecord = try saveResults[record.recordID]?.get() {
+                hostRecord = savedRecord
+                MirageLogger.appState("Registered host in CloudKit: \(name)")
+            }
+        } catch {
+            MirageLogger.error(.appState, "Failed to register host in CloudKit: \(error)")
+            throw error
+        }
+    }
+
+    /// Updates the last-seen timestamp for the host record.
+    ///
+    /// Call this periodically while the host is running to keep the record fresh.
+    public func updateLastSeen() async {
+        guard let record = hostRecord, let container = cloudKitManager.container else { return }
+
+        record[MirageCloudKitHostInfo.RecordKey.lastSeen.rawValue] = Date()
+
+        do {
+            let database = container.privateCloudDatabase
+            _ = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .changedKeys)
+            MirageLogger.appState("Updated host lastSeen timestamp")
+        } catch {
+            MirageLogger.error(.appState, "Failed to update lastSeen: \(error)")
+        }
+    }
+
     // MARK: - Share Management
 
     /// Fetches the share for a host record.
@@ -169,8 +281,10 @@ public final class MirageCloudKitShareManager: Sendable {
             return
         }
 
+        guard let container = cloudKitManager.container else { return }
+
         do {
-            let database = cloudKitManager.container.privateCloudDatabase
+            let database = container.privateCloudDatabase
             let share = try await database.record(for: shareReference.recordID) as? CKShare
             activeShare = share
             MirageLogger.appState("Found existing share with \(share?.participants.count ?? 0) participants")
@@ -183,6 +297,10 @@ public final class MirageCloudKitShareManager: Sendable {
     ///
     /// - Returns: The created share, ready for presenting sharing UI.
     public func createShare() async throws -> CKShare {
+        guard let container = cloudKitManager.container else {
+            throw MirageCloudKitError.containerUnavailable
+        }
+
         isLoading = true
         defer { isLoading = false }
 
@@ -200,7 +318,7 @@ public final class MirageCloudKitShareManager: Sendable {
         share.publicPermission = .none  // Participants only
 
         // Save both record and share
-        let database = cloudKitManager.container.privateCloudDatabase
+        let database = container.privateCloudDatabase
         _ = try await database.modifyRecords(saving: [record, share], deleting: [])
 
         activeShare = share
@@ -213,11 +331,14 @@ public final class MirageCloudKitShareManager: Sendable {
     /// This removes access for all participants.
     public func revokeShare() async throws {
         guard let share = activeShare else { return }
+        guard let container = cloudKitManager.container else {
+            throw MirageCloudKitError.containerUnavailable
+        }
 
         isLoading = true
         defer { isLoading = false }
 
-        let database = cloudKitManager.container.privateCloudDatabase
+        let database = container.privateCloudDatabase
         _ = try await database.modifyRecords(saving: [], deleting: [share.recordID])
 
         activeShare = nil
@@ -229,10 +350,13 @@ public final class MirageCloudKitShareManager: Sendable {
     /// - Parameter participant: The participant to remove.
     public func removeParticipant(_ participant: CKShare.Participant) async throws {
         guard let share = activeShare else { return }
+        guard let container = cloudKitManager.container else {
+            throw MirageCloudKitError.containerUnavailable
+        }
 
         share.removeParticipant(participant)
 
-        let database = cloudKitManager.container.privateCloudDatabase
+        let database = container.privateCloudDatabase
         _ = try await database.modifyRecords(saving: [share], deleting: [])
 
         MirageLogger.appState("Removed participant from share")
@@ -248,6 +372,10 @@ public final class MirageCloudKitShareManager: Sendable {
     ///
     /// - Parameter window: The window to present from.
     public func presentSharingUI(from window: NSWindow) async throws {
+        guard let container = cloudKitManager.container else {
+            throw MirageCloudKitError.containerUnavailable
+        }
+
         let share: CKShare
         if let existing = activeShare {
             share = existing
@@ -261,7 +389,7 @@ public final class MirageCloudKitShareManager: Sendable {
 
         let sharingService = NSSharingService(named: .cloudSharing)
         let itemProvider = NSItemProvider()
-        itemProvider.registerCloudKitShare(share, container: cloudKitManager.container)
+        itemProvider.registerCloudKitShare(share, container: container)
 
         // Present the sharing service picker
         if let sharingService {
@@ -275,6 +403,10 @@ public final class MirageCloudKitShareManager: Sendable {
     ///
     /// - Returns: A configured sharing controller ready for presentation.
     public func createSharingController() async throws -> UICloudSharingController {
+        guard let container = cloudKitManager.container else {
+            throw MirageCloudKitError.containerUnavailable
+        }
+
         let share: CKShare
         if let existing = activeShare {
             share = existing
@@ -286,7 +418,7 @@ public final class MirageCloudKitShareManager: Sendable {
             throw MirageCloudKitError.noHostRecord
         }
 
-        let controller = UICloudSharingController(share: share, container: cloudKitManager.container)
+        let controller = UICloudSharingController(share: share, container: container)
         controller.availablePermissions = [.allowReadWrite]
 
         return controller
@@ -301,7 +433,11 @@ public final class MirageCloudKitShareManager: Sendable {
     ///
     /// - Parameter metadata: The share metadata from the URL.
     public func acceptShare(_ metadata: CKShare.Metadata) async throws {
-        try await cloudKitManager.container.accept(metadata)
+        guard let container = cloudKitManager.container else {
+            throw MirageCloudKitError.containerUnavailable
+        }
+
+        try await container.accept(metadata)
         MirageLogger.appState("Accepted share from \(metadata.ownerIdentity.nameComponents?.formatted() ?? "unknown")")
 
         // Refresh participant cache
@@ -322,6 +458,9 @@ public enum MirageCloudKitError: LocalizedError, Sendable {
     /// Share not found.
     case shareNotFound
 
+    /// CloudKit container is not available.
+    case containerUnavailable
+
     public var errorDescription: String? {
         switch self {
         case .recordNotSaved:
@@ -330,6 +469,8 @@ public enum MirageCloudKitError: LocalizedError, Sendable {
             return "No host record available for sharing"
         case .shareNotFound:
             return "Share not found"
+        case .containerUnavailable:
+            return "CloudKit is not available"
         }
     }
 }

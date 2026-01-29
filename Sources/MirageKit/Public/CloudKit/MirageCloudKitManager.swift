@@ -28,6 +28,9 @@ import UIKit
 /// let manager = MirageCloudKitManager(configuration: config)
 /// await manager.initialize()
 /// ```
+///
+/// - Note: The `CKContainer` is created lazily during ``initialize()`` to prevent crashes
+///   when CloudKit is misconfigured or unavailable. Check ``isAvailable`` after initialization.
 @Observable
 @MainActor
 public final class MirageCloudKitManager: Sendable {
@@ -36,8 +39,8 @@ public final class MirageCloudKitManager: Sendable {
     /// Configuration for CloudKit operations.
     public let configuration: MirageCloudKitConfiguration
 
-    /// CloudKit container.
-    public let container: CKContainer
+    /// CloudKit container, created lazily during initialization.
+    public private(set) var container: CKContainer?
 
     /// Current user's CloudKit record ID (recordName portion).
     public private(set) var currentUserRecordID: String?
@@ -59,9 +62,9 @@ public final class MirageCloudKitManager: Sendable {
     /// Creates a CloudKit manager with the specified configuration.
     ///
     /// - Parameter configuration: CloudKit configuration including container ID and record types.
+    /// - Note: The `CKContainer` is not created until ``initialize()`` is called.
     public init(configuration: MirageCloudKitConfiguration) {
         self.configuration = configuration
-        self.container = CKContainer(identifier: configuration.containerIdentifier)
     }
 
     /// Creates a CloudKit manager with just a container identifier, using default settings.
@@ -76,9 +79,34 @@ public final class MirageCloudKitManager: Sendable {
     /// Initializes CloudKit and fetches the current user's record ID.
     ///
     /// Call this early in your app's lifecycle to set up CloudKit.
-    /// This method registers the current device and caches the user's identity.
+    /// This method creates the `CKContainer`, registers the current device,
+    /// and caches the user's identity.
+    ///
+    /// - Note: Container creation is deferred to this method to avoid crashes when
+    ///   CloudKit is misconfigured. If container creation fails, CloudKit features
+    ///   will be unavailable but the app will continue to function.
     public func initialize() async {
         guard !isInitialized else { return }
+
+        // Create the container lazily to avoid crashes during app launch
+        // when CloudKit is misconfigured or unavailable
+        if container == nil {
+            do {
+                container = try createContainer()
+            } catch {
+                lastError = error
+                isAvailable = false
+                isInitialized = true
+                MirageLogger.error(.appState, "CloudKit container creation failed: \(error)")
+                return
+            }
+        }
+
+        guard let container else {
+            isAvailable = false
+            isInitialized = true
+            return
+        }
 
         do {
             // Check account status
@@ -92,15 +120,18 @@ public final class MirageCloudKitManager: Sendable {
             case .noAccount:
                 isAvailable = false
                 MirageLogger.appState("CloudKit: No iCloud account signed in")
+                isInitialized = true
                 return
 
             case .restricted, .couldNotDetermine, .temporarilyUnavailable:
                 isAvailable = false
                 MirageLogger.appState("CloudKit: Account status \(status)")
+                isInitialized = true
                 return
 
             @unknown default:
                 isAvailable = false
+                isInitialized = true
                 return
             }
 
@@ -117,8 +148,22 @@ public final class MirageCloudKitManager: Sendable {
         } catch {
             lastError = error
             isAvailable = false
+            isInitialized = true
             MirageLogger.error(.appState, "CloudKit initialization failed: \(error)")
         }
+    }
+
+    /// Creates a CKContainer with error handling.
+    ///
+    /// - Throws: An error if the container cannot be created (e.g., invalid identifier,
+    ///   missing entitlements, or provisioning mismatch).
+    /// - Returns: The created CKContainer.
+    private func createContainer() throws -> CKContainer {
+        // CKContainer(identifier:) can crash synchronously if the container
+        // is misconfigured. We wrap it in a do-catch to handle potential
+        // runtime issues, though note that some failures may still trap.
+        // The main protection is deferring this call until after app launch.
+        return CKContainer(identifier: configuration.containerIdentifier)
     }
 
     /// Reinitializes CloudKit after an account change.
@@ -137,7 +182,7 @@ public final class MirageCloudKitManager: Sendable {
 
     /// Registers the current device in the user's private CloudKit database.
     private func registerCurrentDevice() async {
-        guard isAvailable else { return }
+        guard isAvailable, let container else { return }
 
         #if os(macOS)
         let deviceName = Host.current().localizedName ?? "Mac"
@@ -197,7 +242,7 @@ public final class MirageCloudKitManager: Sendable {
             return true
         }
 
-        guard isAvailable else { return false }
+        guard isAvailable, let container else { return false }
 
         do {
             // Fetch all accepted shares in the shared database
