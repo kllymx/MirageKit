@@ -71,10 +71,12 @@ extension MirageClientService {
     /// Get the maximum refresh rate requested by the client.
     func getScreenMaxRefreshRate() -> Int {
         #if os(iOS)
+        let knownMax = MirageClientService.lastKnownScreenMaxFPS
+        let screenMax = knownMax > 0 ? knownMax : 60
         if let override = maxRefreshRateOverride {
-            return override
+            return min(override, screenMax)
         }
-        return 60
+        return screenMax
         #else
         let screenMax: Int
         #if os(macOS)
@@ -93,7 +95,7 @@ extension MirageClientService {
     }
 
     public func updateMaxRefreshRateOverride(_ newValue: Int) {
-        let clamped = newValue >= 120 ? 120 : 60
+        let clamped = clampRefreshRate(newValue)
         guard maxRefreshRateOverride != clamped else { return }
         maxRefreshRateOverride = clamped
     }
@@ -161,7 +163,7 @@ extension MirageClientService {
             throw MirageError.protocolError("Not connected")
         }
 
-        let clamped = maxRefreshRate >= 120 ? 120 : 60
+        let clamped = clampRefreshRate(maxRefreshRate)
         let request = StreamRefreshRateChangeMessage(
             streamID: streamID,
             maxRefreshRate: clamped,
@@ -183,7 +185,7 @@ extension MirageClientService {
     }
 
     func updateStreamRefreshRateOverride(streamID: StreamID, maxRefreshRate: Int) {
-        let clamped = maxRefreshRate >= 120 ? 120 : 60
+        let clamped = clampRefreshRate(maxRefreshRate)
         let existing = refreshRateOverridesByStream[streamID]
         guard existing != clamped else { return }
         refreshRateOverridesByStream[streamID] = clamped
@@ -199,5 +201,10 @@ extension MirageClientService {
         refreshRateOverridesByStream.removeValue(forKey: streamID)
         refreshRateMismatchCounts.removeValue(forKey: streamID)
         refreshRateFallbackTargets.removeValue(forKey: streamID)
+    }
+
+    private func clampRefreshRate(_ rate: Int) -> Int {
+        guard rate > 0 else { return 60 }
+        return rate >= 120 ? 120 : 60
     }
 }

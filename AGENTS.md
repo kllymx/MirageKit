@@ -59,6 +59,7 @@ MirageKit/
 
 ## Public API (`Sources/MirageKit/Public/`)
 - Host services and delegates: `Host/`.
+- Host frame-rate helpers: `Host/MirageHostService+FrameRate.swift`.
 - Client services, delegates, session stores, metrics, cursor snapshots: `Client/`.
 - Input event types: `Input/`.
 - Shared types and configuration: `Types/`.

@@ -19,7 +19,7 @@ public struct MirageStreamViewRepresentable: UIViewRepresentable {
     /// Callback when drawable metrics change - reports actual pixel dimensions and scale
     public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
 
-    /// Callback when the view decides on a refresh rate override (60 or 120).
+    /// Callback when the view decides on a refresh rate override.
     public var onRefreshRateOverrideChange: ((Int) -> Void)?
 
     /// Cursor store for pointer updates (decoupled from SwiftUI observation).

@@ -100,7 +100,7 @@ extension MirageHostService {
         maxRefreshRate: Int,
         forceDisplayRefresh: Bool
     ) async {
-        let targetFrameRate = maxRefreshRate >= 120 ? 120 : 60
+        let targetFrameRate = resolvedTargetFrameRate(maxRefreshRate)
 
         if streamID == desktopStreamID, let desktopContext = desktopStreamContext {
             let currentRate = await desktopContext.getTargetFrameRate()

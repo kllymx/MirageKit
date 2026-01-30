@@ -240,7 +240,7 @@ public final class MirageHostService {
     ///   - captureQueueDepth: Optional ScreenCaptureKit queue depth override
     ///   - minBitrate: Optional minimum target bitrate (bits per second)
     ///   - maxBitrate: Optional maximum target bitrate (bits per second)
-    ///   - targetFrameRate: Optional frame rate override (60 or 120fps, based on client capability and quality)
+    ///   - targetFrameRate: Optional frame rate override (60/120 based on client capability)
     ///   - pixelFormat: Optional pixel format override for capture and encode
     ///   - adaptiveScaleEnabled: Optional toggle for adaptive stream scaling
     // TODO: HDR support - requires proper virtual display EDR configuration

@@ -173,7 +173,13 @@ extension SharedVirtualDisplayManager {
         refreshRate: Int = 60
     ) async throws {
         let requestedRate = refreshRate
-        let refreshRate = resolvedRefreshRate(requestedRate)
+        let refreshRate: Int
+        switch consumer {
+        case .desktopStream, .stream:
+            refreshRate = SharedVirtualDisplayManager.streamRefreshRate(for: requestedRate)
+        default:
+            refreshRate = resolvedRefreshRate(requestedRate)
+        }
         guard let existingInfo = activeConsumers[consumer] else {
             MirageLogger.error(.host, "Cannot update resolution: consumer \(consumer) not found")
             return

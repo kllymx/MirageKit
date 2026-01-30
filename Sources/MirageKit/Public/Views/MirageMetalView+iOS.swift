@@ -27,12 +27,8 @@ public class MirageMetalView: MTKView {
     /// Callback when drawable metrics change - reports pixel size and scale factor
     public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
 
-    /// Callback when the view decides on a refresh rate override (60 or 120).
-    public var onRefreshRateOverrideChange: ((Int) -> Void)? {
-        didSet {
-            refreshRateMonitor.onOverrideChange = onRefreshRateOverrideChange
-        }
-    }
+    /// Callback when the view decides on a refresh rate override.
+    public var onRefreshRateOverrideChange: ((Int) -> Void)?
 
     /// Last reported drawable size to avoid redundant callbacks
     private var lastReportedDrawableSize: CGSize = .zero
@@ -135,6 +131,10 @@ public class MirageMetalView: MTKView {
             metalLayer.maximumDrawableCount = 3
         }
 
+        refreshRateMonitor.onOverrideChange = { [weak self] override in
+            self?.applyRefreshRateOverride(override)
+        }
+
         applyRenderPreferences()
         startObservingPreferences()
     }
@@ -193,7 +193,7 @@ public class MirageMetalView: MTKView {
         guard renderDisplayLink == nil else { return }
         guard superview != nil, !renderingSuspended else { return }
         let link = CADisplayLink(target: self, selector: #selector(handleRenderDisplayLink(_:)))
-        link.preferredFramesPerSecond = preferredFramesPerSecond
+        applyPreferredFrameRate(to: link, rate: preferredFramesPerSecond)
         link.add(to: .main, forMode: .common)
         renderDisplayLink = link
         if MirageLogger.isEnabled(.renderer) {
@@ -474,8 +474,25 @@ public class MirageMetalView: MTKView {
     }
 
     private func updateFrameRatePreference(proMotionEnabled: Bool) {
-        preferredFramesPerSecond = proMotionEnabled ? 120 : 60
-        renderDisplayLink?.preferredFramesPerSecond = preferredFramesPerSecond
+        let desired = proMotionEnabled ? 120 : 60
+        applyRefreshRateOverride(desired)
+    }
+
+    private func applyRefreshRateOverride(_ override: Int) {
+        let clamped = override >= 120 ? 120 : 60
+        preferredFramesPerSecond = clamped
+        if let renderDisplayLink {
+            applyPreferredFrameRate(to: renderDisplayLink, rate: clamped)
+        }
+        onRefreshRateOverrideChange?(clamped)
+    }
+
+    private func applyPreferredFrameRate(to link: CADisplayLink, rate: Int) {
+        link.preferredFrameRateRange = CAFrameRateRange(
+            minimum: Float(rate),
+            maximum: Float(rate),
+            preferred: Float(rate)
+        )
     }
 
     private func updateOutputFormatIfNeeded(_ pixelFormatType: OSType) {

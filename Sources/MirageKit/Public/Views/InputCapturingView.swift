@@ -38,7 +38,7 @@ public class InputCapturingView: UIView {
         }
     }
 
-    /// Callback when the view decides on a refresh rate override (60 or 120).
+    /// Callback when the view decides on a refresh rate override.
     public var onRefreshRateOverrideChange: ((Int) -> Void)? {
         didSet {
             metalView.onRefreshRateOverrideChange = onRefreshRateOverrideChange

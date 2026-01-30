@@ -62,7 +62,7 @@ struct StreamScaleChangeMessage: Codable {
 struct StreamRefreshRateChangeMessage: Codable {
     /// The stream to update
     let streamID: StreamID
-    /// Maximum refresh rate in Hz (60 or 120)
+    /// Maximum refresh rate in Hz (60/120 based on client capability)
     let maxRefreshRate: Int
     /// Force a display refresh reconfiguration on the host (fallback path)
     var forceDisplayRefresh: Bool? = nil

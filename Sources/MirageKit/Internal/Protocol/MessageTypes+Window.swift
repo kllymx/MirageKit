@@ -66,7 +66,7 @@ struct StartStreamMessage: Codable {
     var adaptiveScaleEnabled: Bool? = nil
     /// Client latency preference for buffering behavior
     var latencyMode: MirageStreamLatencyMode? = nil
-    /// Client refresh rate override in Hz (60 or 120).
+    /// Client refresh rate override in Hz (60/120 based on client capability).
     var maxRefreshRate: Int = 60
     // TODO: HDR support - requires proper virtual display EDR configuration
     // /// Whether to stream in HDR (Rec. 2020 with PQ transfer function)

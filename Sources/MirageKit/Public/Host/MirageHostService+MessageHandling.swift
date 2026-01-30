@@ -55,7 +55,7 @@ extension MirageHostService {
                 }
 
                 let clientMaxRefreshRate = request.maxRefreshRate
-                let targetFrameRate = clientMaxRefreshRate >= 120 ? 120 : 60
+                let targetFrameRate = resolvedTargetFrameRate(clientMaxRefreshRate)
 
                 let presetConfig = request.preferredQuality.encoderConfiguration(for: targetFrameRate)
                 let keyFrameInterval = request.keyFrameInterval ?? presetConfig.keyFrameInterval

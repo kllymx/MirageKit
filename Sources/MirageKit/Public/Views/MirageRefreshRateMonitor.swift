@@ -87,15 +87,21 @@ final class MirageRefreshRateMonitor: NSObject {
         if maxFPS != lastScreenMaxFPS {
             lastScreenMaxFPS = maxFPS
         }
+        if maxFPS > 0 {
+            MirageClientService.lastKnownScreenMaxFPS = maxFPS
+        }
         let target = maxFPS >= 120 ? 120 : 60
         setOverride(target)
     }
 
     private func resolveScreenMaxFPS() -> Int {
+        if let screen = view?.window?.windowScene?.screen {
+            return screen.maximumFramesPerSecond
+        }
         if let screen = view?.window?.screen {
             return screen.maximumFramesPerSecond
         }
-        return UIScreen.main.maximumFramesPerSecond
+        return 60
     }
 
     private func setOverride(_ newValue: Int) {

@@ -43,7 +43,7 @@ extension MirageHostService {
 
             // Determine target frame rate based on client capability
             let clientMaxRefreshRate = request.maxRefreshRate
-            let targetFrameRate = clientMaxRefreshRate >= 120 ? 120 : 60
+            let targetFrameRate = resolvedTargetFrameRate(clientMaxRefreshRate)
             MirageLogger.host("Frame rate: \(targetFrameRate)fps (quality=\(request.preferredQuality.displayName), client max=\(clientMaxRefreshRate)Hz)")
 
             let presetConfig = request.preferredQuality.encoderConfiguration(for: targetFrameRate)

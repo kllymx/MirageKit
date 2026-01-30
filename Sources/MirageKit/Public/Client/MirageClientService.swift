@@ -224,7 +224,7 @@ public final class MirageClientService {
     // Minimum window sizes per stream (from host)
     var streamMinSizes: [StreamID: (minWidth: Int, minHeight: Int)] = [:]
 
-    // Per-stream refresh rate overrides (60 or 120).
+    // Per-stream refresh rate overrides (60/120 only).
     var refreshRateOverridesByStream: [StreamID: Int] = [:]
     var refreshRateMismatchCounts: [StreamID: Int] = [:]
     var refreshRateFallbackTargets: [StreamID: Int] = [:]
@@ -290,5 +290,7 @@ public final class MirageClientService {
     #if os(iOS) || os(visionOS)
     /// Cached drawable size from the Metal view.
     public static var lastKnownDrawableSize: CGSize = .zero
+    /// Cached max refresh rate from the active screen (for external display support).
+    public static var lastKnownScreenMaxFPS: Int = 0
     #endif
 }
