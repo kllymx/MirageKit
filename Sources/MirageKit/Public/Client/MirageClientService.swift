@@ -205,7 +205,7 @@ public final class MirageClientService {
     }
 
     /// Thread-safe set of stream IDs where input is blocked (decoder unhealthy)
-    /// Input is blocked when decoder is awaiting keyframe or has decode errors
+    /// Input is blocked when the stream is frozen for a sustained interval.
     let inputBlockedStreamIDsLock = NSLock()
     nonisolated(unsafe) var _inputBlockedStreamIDs: Set<StreamID> = []
 

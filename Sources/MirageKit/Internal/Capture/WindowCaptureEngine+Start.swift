@@ -37,6 +37,10 @@ extension WindowCaptureEngine {
         dimensionChangeHandler = onDimensionChange
 
         currentDisplayRefreshRate = nil
+        updateDisplayRefreshRate(for: display.displayID)
+        if let refreshRate = currentDisplayRefreshRate {
+            MirageLogger.capture("Display mode refresh rate: \(refreshRate)")
+        }
 
         // Create stream configuration
         let streamConfig = SCStreamConfiguration()
@@ -128,6 +132,7 @@ extension WindowCaptureEngine {
         }
 
         // Create output handler with windowID for fallback capture during SCK pauses
+        let captureRate = effectiveCaptureRate()
         streamOutput = CaptureStreamOutput(
             onFrame: onFrame,
             onKeyframeRequest: { [weak self] in
@@ -139,10 +144,9 @@ extension WindowCaptureEngine {
             windowID: window.windowID,
             usesDetailedMetadata: true,
             tracksFrameStatus: true,
-            frameGapThreshold: frameGapThreshold(for: currentFrameRate),
-            stallThreshold: stallThreshold(for: currentFrameRate),
-            expectedFrameRate: Double(currentFrameRate),
-            pacingFrameRate: currentFrameRate,
+            frameGapThreshold: frameGapThreshold(for: captureRate),
+            stallThreshold: stallThreshold(for: captureRate),
+            expectedFrameRate: Double(captureRate),
             poolMinimumBufferCount: bufferPoolMinimumCount
         )
 
@@ -344,6 +348,7 @@ extension WindowCaptureEngine {
         }
 
         // Create output handler
+        let captureRate = effectiveCaptureRate()
         streamOutput = CaptureStreamOutput(
             onFrame: onFrame,
             onKeyframeRequest: { [weak self] in
@@ -354,10 +359,9 @@ extension WindowCaptureEngine {
             },
             usesDetailedMetadata: false,
             tracksFrameStatus: true,
-            frameGapThreshold: frameGapThreshold(for: currentFrameRate),
-            stallThreshold: stallThreshold(for: currentFrameRate),
-            expectedFrameRate: Double(currentFrameRate),
-            pacingFrameRate: currentFrameRate,
+            frameGapThreshold: frameGapThreshold(for: captureRate),
+            stallThreshold: stallThreshold(for: captureRate),
+            expectedFrameRate: Double(captureRate),
             poolMinimumBufferCount: bufferPoolMinimumCount
         )
 

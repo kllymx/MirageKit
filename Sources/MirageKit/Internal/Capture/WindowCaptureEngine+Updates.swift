@@ -184,6 +184,13 @@ extension WindowCaptureEngine {
         try await stream.updateContentFilter(newFilter)
         try await stream.updateConfiguration(streamConfig)
 
+        let captureRate = effectiveCaptureRate()
+        streamOutput?.updateExpectations(
+            frameRate: captureRate,
+            gapThreshold: frameGapThreshold(for: captureRate),
+            stallThreshold: stallThreshold(for: captureRate)
+        )
+
         MirageLogger.capture("Capture switched to display \(newDisplay.displayID) at \(newWidth)x\(newHeight)")
     }
     func updateFrameRate(_ fps: Int) async throws {
@@ -213,10 +220,11 @@ extension WindowCaptureEngine {
         streamConfig.queueDepth = captureQueueDepth
 
         try await stream.updateConfiguration(streamConfig)
+        let captureRate = effectiveCaptureRate()
         streamOutput?.updateExpectations(
-            frameRate: fps,
-            gapThreshold: frameGapThreshold(for: fps),
-            stallThreshold: stallThreshold(for: fps)
+            frameRate: captureRate,
+            gapThreshold: frameGapThreshold(for: captureRate),
+            stallThreshold: stallThreshold(for: captureRate)
         )
         MirageLogger.capture("Frame rate updated to \(fps) fps")
     }

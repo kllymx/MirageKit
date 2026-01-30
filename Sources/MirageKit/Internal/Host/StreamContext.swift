@@ -172,7 +172,7 @@ actor StreamContext {
 
     /// Frame rate for cadence and queue limits
     var currentFrameRate: Int
-    /// Frame rate requested from ScreenCaptureKit.
+    /// Effective capture cadence reported by ScreenCaptureKit.
     var captureFrameRate: Int
     /// Optional override for capture frame rate.
     var captureFrameRateOverride: Int?
@@ -310,7 +310,7 @@ actor StreamContext {
         frameThrottle.configure(
             targetFrameRate: currentFrameRate,
             captureFrameRate: captureFrameRate,
-            isPaced: true
+            isPaced: false
         )
     }
 
@@ -345,8 +345,15 @@ actor StreamContext {
         frameThrottle.configure(
             targetFrameRate: currentFrameRate,
             captureFrameRate: captureFrameRate,
-            isPaced: true
+            isPaced: false
         )
+    }
+
+    func refreshCaptureCadence() async {
+        guard let captureEngine else { return }
+        let effectiveRate = await captureEngine.effectiveCaptureRate()
+        captureFrameRate = effectiveRate
+        updateFrameThrottle()
     }
 
     static func frameBufferDepth(

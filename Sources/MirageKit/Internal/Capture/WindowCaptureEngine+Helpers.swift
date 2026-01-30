@@ -79,10 +79,14 @@ extension WindowCaptureEngine {
     func minimumFrameIntervalRate() -> Int {
         if let refreshRate = currentDisplayRefreshRate, refreshRate > 0 {
             // ScreenCaptureKit cadence follows the higher of target FPS and display refresh.
-            // The pacing controller still caps delivery to currentFrameRate.
+            // Stream throttling caps delivery to currentFrameRate.
             return max(currentFrameRate, refreshRate)
         }
         return currentFrameRate
+    }
+
+    func effectiveCaptureRate() -> Int {
+        minimumFrameIntervalRate()
     }
 
     func frameGapThreshold(for frameRate: Int) -> CFAbsoluteTime {

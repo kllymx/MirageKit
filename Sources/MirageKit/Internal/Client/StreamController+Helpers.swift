@@ -21,44 +21,40 @@ extension StreamController {
         }
     }
 
+    func recordDecodedFrame() {
+        lastDecodedFrameTime = CFAbsoluteTimeGetCurrent()
+        startFreezeMonitorIfNeeded()
+        if isInputBlocked {
+            updateInputBlocking(false)
+        }
+    }
+
     /// Update input blocking state and notify callback
     func updateInputBlocking(_ isBlocked: Bool) {
         guard self.isInputBlocked != isBlocked else { return }
         self.isInputBlocked = isBlocked
         MirageLogger.client("Input blocking state changed: \(isBlocked ? "BLOCKED" : "allowed") for stream \(streamID)")
-        if isBlocked {
-            startKeyframeRecoveryLoop()
-        } else {
-            stopKeyframeRecoveryLoop()
-        }
         Task { @MainActor [weak self] in
             await self?.onInputBlockingChanged?(isBlocked)
         }
     }
 
-    private func startKeyframeRecoveryLoop() {
+    func startKeyframeRecoveryLoopIfNeeded() {
         guard keyframeRecoveryTask == nil else { return }
         keyframeRecoveryTask = Task { [weak self] in
             await self?.runKeyframeRecoveryLoop()
         }
     }
 
-    private func stopKeyframeRecoveryLoop() {
-        keyframeRecoveryTask?.cancel()
-        keyframeRecoveryTask = nil
-        lastRecoveryRequestTime = 0
-    }
-
     private func runKeyframeRecoveryLoop() async {
-        while isInputBlocked && !Task.isCancelled {
+        while !Task.isCancelled {
             do {
                 try await Task.sleep(for: Self.keyframeRecoveryInterval)
             } catch {
                 break
             }
-            guard isInputBlocked && !Task.isCancelled else { break }
             let now = CFAbsoluteTimeGetCurrent()
-            guard let awaitingDuration = reassembler.awaitingKeyframeDuration(now: now) else { continue }
+            guard let awaitingDuration = reassembler.awaitingKeyframeDuration(now: now) else { break }
             let timeout = reassembler.keyframeTimeoutSeconds()
             guard awaitingDuration >= timeout else { continue }
             if lastRecoveryRequestTime > 0, now - lastRecoveryRequestTime < timeout {
@@ -71,6 +67,39 @@ extension StreamController {
             }
         }
         keyframeRecoveryTask = nil
+        lastRecoveryRequestTime = 0
+    }
+
+    private func startFreezeMonitorIfNeeded() {
+        guard freezeMonitorTask == nil else { return }
+        freezeMonitorTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: Self.freezeCheckInterval)
+                } catch {
+                    break
+                }
+                await self.evaluateFreezeState()
+            }
+            await self.clearFreezeMonitorTask()
+        }
+    }
+
+    func stopFreezeMonitor() {
+        freezeMonitorTask?.cancel()
+        freezeMonitorTask = nil
+    }
+
+    private func clearFreezeMonitorTask() {
+        freezeMonitorTask = nil
+    }
+
+    private func evaluateFreezeState() {
+        guard lastDecodedFrameTime > 0 else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        let isFrozen = now - lastDecodedFrameTime > Self.freezeTimeout
+        updateInputBlocking(isFrozen)
     }
 
     func setResizeState(_ newState: ResizeState) async {

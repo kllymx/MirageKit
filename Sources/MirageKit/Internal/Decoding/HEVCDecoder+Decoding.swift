@@ -55,17 +55,11 @@ extension HEVCDecoder {
         cachedFormatDescription = nil
 
         // Clear dimension change state
-        let wasBlocking = awaitingDimensionChange
         awaitingDimensionChange = false
         expectedDimensions = nil
 
         // Reset error tracking
         errorTracker?.recordSuccess()
-
-        // Unblock input if we were blocking
-        if wasBlocking {
-            onInputBlockingChanged?(false)
-        }
 
         flushMemoryPool()
 

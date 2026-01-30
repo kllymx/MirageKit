@@ -14,24 +14,10 @@ import VideoToolbox
 
 extension HEVCDecoder {
     func setErrorThresholdHandler(_ handler: @escaping @Sendable () -> Void) {
-        // Wrap the handler to also block input when errors exceed threshold
-        let wrappedHandler: @Sendable () -> Void = { [weak self] in
-            guard let self else { return }
-            Task {
-                await self.onInputBlockingChanged?(true)
-            }
-            handler()
-        }
-        let inputUnblockHandler: @Sendable () -> Void = { [weak self] in
-            guard let self else { return }
-            Task {
-                await self.onInputBlockingChanged?(false)
-            }
-        }
         errorTracker = DecodeErrorTracker(
             maxErrors: maxConsecutiveErrors,
-            onThresholdReached: wrappedHandler,
-            onRecovery: inputUnblockHandler
+            onThresholdReached: handler,
+            onRecovery: nil
         )
     }
     func setDimensionChangeHandler(_ handler: @escaping @Sendable () -> Void) {
@@ -55,11 +41,8 @@ extension HEVCDecoder {
             expectedDimensions = nil
         }
         MirageLogger.decoder("Dimension change expected - discarding P-frames until keyframe")
-        // Block input while awaiting keyframe - user can't see what they're clicking
-        onInputBlockingChanged?(true)
     }
     func clearPendingState() {
-        let wasBlocking = awaitingDimensionChange
         if awaitingDimensionChange {
             MirageLogger.decoder("Clearing stuck awaitingDimensionChange state for recovery")
             awaitingDimensionChange = false
@@ -67,10 +50,5 @@ extension HEVCDecoder {
         }
         // Reset error tracking to give fresh keyframe a clean slate
         errorTracker?.recordSuccess()
-        // Unblock input if we were blocking
-        if wasBlocking {
-            onInputBlockingChanged?(false)
-        }
     }
 }
-

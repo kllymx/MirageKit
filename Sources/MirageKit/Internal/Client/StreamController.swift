@@ -80,6 +80,12 @@ actor StreamController {
     /// Interval for retrying keyframe requests while decoder is unhealthy
     static let keyframeRecoveryInterval: Duration = .seconds(1)
 
+    /// Duration without decoded frames before input is blocked.
+    static let freezeTimeout: CFAbsoluteTime = 5.0
+
+    /// Interval for checking freeze state.
+    static let freezeCheckInterval: Duration = .milliseconds(500)
+
     /// Maximum number of frames buffered for decode before dropping old frames.
     static let maxQueuedFrames: Int = 6
 
@@ -114,6 +120,9 @@ actor StreamController {
     var lastMetricsLogTime: CFAbsoluteTime = 0
     static let metricsDispatchInterval: Duration = .milliseconds(500)
 
+    var lastDecodedFrameTime: CFAbsoluteTime = 0
+    var freezeMonitorTask: Task<Void, Never>?
+
     // MARK: - Callbacks
 
     /// Called when resize state changes
@@ -134,11 +143,11 @@ actor StreamController {
     /// Called when the first frame is decoded for a stream.
     private(set) var onFirstFrame: (@MainActor @Sendable () -> Void)?
 
-    /// Called when input blocking state changes (true = block input, false = allow input)
-    /// Input should be blocked when decoder is in a bad state (awaiting keyframe, decode errors)
+    /// Called when input blocking state changes (true = block input, false = allow input).
+    /// Input is blocked only when the stream is frozen for a sustained period.
     private(set) var onInputBlockingChanged: (@MainActor @Sendable (Bool) -> Void)?
 
-    /// Current input blocking state - true when decoder is unhealthy
+    /// Current input blocking state - true when the stream is frozen.
     var isInputBlocked: Bool = false
 
     /// Set callbacks for stream events
@@ -169,12 +178,15 @@ actor StreamController {
 
     /// Start the controller - sets up decoder and reassembler callbacks
     func start() async {
+        lastDecodedFrameTime = 0
+        stopFreezeMonitor()
+
         // Set up error recovery - request keyframe when decode errors exceed threshold
         await decoder.setErrorThresholdHandler { [weak self] in
             guard let self else { return }
             Task {
                 self.reassembler.enterKeyframeOnlyMode()
-                await self.updateInputBlocking(true)
+                await self.startKeyframeRecoveryLoopIfNeeded()
                 await self.onKeyframeNeeded?()
             }
         }
@@ -189,14 +201,6 @@ actor StreamController {
             }
         }
 
-        // Set up input blocking handler - block input when decoder is unhealthy
-        await decoder.setInputBlockingHandler { [weak self] isBlocked in
-            guard let self else { return }
-            Task {
-                await self.updateInputBlocking(isBlocked)
-            }
-        }
-
         // Set up frame handler
         let metricsTracker = metricsTracker
         await decoder.startDecoding { [weak self] (pixelBuffer: CVPixelBuffer, presentationTime: CMTime, contentRect: CGRect) in
@@ -208,6 +212,9 @@ actor StreamController {
                 Task { [weak self] in
                     await self?.markFirstFrameReceived()
                 }
+            }
+            Task { [weak self] in
+                await self?.recordDecodedFrame()
             }
         }
 
@@ -272,7 +279,7 @@ actor StreamController {
             guard let self else { return }
             Task {
                 self.reassembler.enterKeyframeOnlyMode()
-                await self.updateInputBlocking(true)
+                await self.startKeyframeRecoveryLoopIfNeeded()
                 await self.onKeyframeNeeded?()
             }
         }
@@ -355,6 +362,7 @@ actor StreamController {
         // Stop frame processing - finish stream and cancel task
         stopFrameProcessingPipeline()
         stopMetricsReporting()
+        stopFreezeMonitor()
 
         resizeDebounceTask?.cancel()
         resizeDebounceTask = nil

@@ -19,14 +19,13 @@ extension StreamContext {
         let desiredCaptureRate = resolvedCaptureFrameRate(for: clamped)
         if desiredCaptureRate != captureFrameRate {
             try await captureEngine.updateFrameRate(desiredCaptureRate)
-            captureFrameRate = desiredCaptureRate
         }
-        await encoder?.updateFrameRate(clamped)
-        encoderConfig = encoderConfig.withTargetFrameRate(clamped)
         currentFrameRate = clamped
+        encoderConfig = encoderConfig.withTargetFrameRate(clamped)
+        await refreshCaptureCadence()
+        await encoder?.updateFrameRate(clamped)
         updateKeyframeCadence()
         updateQueueLimits()
-        updateFrameThrottle()
         stopCadenceTask()
         startCadenceTaskIfNeeded()
         MirageLogger.stream("Stream \(streamID) frame rate updated to \(clamped) fps (capture \(captureFrameRate) fps)")

@@ -47,11 +47,6 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private var stallThreshold: CFAbsoluteTime
     private var expectedFrameRate: Double
     private let expectationLock = NSLock()
-
-    private let framePacer: FramePacingController?
-    private var pacingDropCount: UInt64 = 0
-    private var lastPacingLogTime: CFAbsoluteTime = 0
-    private var pacingDropsWindowCount: UInt64 = 0
     private var rawFrameWindowCount: UInt64 = 0
     private var rawFrameWindowStartTime: CFAbsoluteTime = 0
 
@@ -84,7 +79,6 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         frameGapThreshold: CFAbsoluteTime = 0.100,
         stallThreshold: CFAbsoluteTime = 1.0,
         expectedFrameRate: Double = 0,
-        pacingFrameRate: Int? = nil,
         poolMinimumBufferCount: Int = 6
     ) {
         self.onFrame = onFrame
@@ -96,11 +90,6 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         self.frameGapThreshold = frameGapThreshold
         self.stallThreshold = stallThreshold
         self.expectedFrameRate = expectedFrameRate
-        if let pacingFrameRate, pacingFrameRate > 0 {
-            self.framePacer = FramePacingController(targetFPS: pacingFrameRate)
-        } else {
-            self.framePacer = nil
-        }
         self.poolMinimumBufferCount = max(2, poolMinimumBufferCount)
         self.frameCopier = CaptureFrameCopier()
         super.init()
@@ -138,7 +127,6 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
             frameGapThreshold = gapThreshold
             self.stallThreshold = stallThreshold
         }
-        framePacer?.updateTargetFPS(frameRate)
         stallSignaled = false
         stopWatchdogTimer()
         startWatchdogTimer()
@@ -243,29 +231,10 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
                 let rawFps = Double(rawFrameWindowCount) / elapsed
                 let rawFpsText = rawFps.formatted(.number.precision(.fractionLength(1)))
                 let targetText = expectedFrameRate.formatted(.number.precision(.fractionLength(1)))
-                MirageLogger.capture(
-                    "Capture raw fps: \(rawFpsText) (target=\(targetText), pacingDrops=\(pacingDropsWindowCount))"
-                )
+                MirageLogger.capture("Capture raw fps: \(rawFpsText) (target=\(targetText))")
                 rawFrameWindowCount = 0
-                pacingDropsWindowCount = 0
                 rawFrameWindowStartTime = captureTime
             }
-        }
-
-        if let framePacer, !framePacer.shouldCaptureFrame(at: captureTime) {
-            lastDeliveredFrameTime = captureTime
-            stallSignaled = false
-            pacingDropsWindowCount += 1
-            if diagnosticsEnabled {
-                pacingDropCount += 1
-                if lastPacingLogTime == 0 || captureTime - lastPacingLogTime > 2.0 {
-                    let drops = pacingDropCount
-                    pacingDropCount = 0
-                    lastPacingLogTime = captureTime
-                    MirageLogger.capture("Capture pacing drops: \(drops) frames")
-                }
-            }
-            return
         }
 
         // Validate the sample buffer

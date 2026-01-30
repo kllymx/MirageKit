@@ -164,6 +164,7 @@ extension StreamContext {
         ) { [weak self] frame in
             self?.enqueueCapturedFrame(frame)
         }
+        await refreshCaptureCadence()
 
         startCadenceTaskIfNeeded()
         await encoder?.forceKeyframe()

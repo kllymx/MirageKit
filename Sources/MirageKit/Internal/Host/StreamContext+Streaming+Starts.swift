@@ -137,6 +137,7 @@ extension StreamContext {
         ) { [weak self] frame in
             self?.enqueueCapturedFrame(frame)
         }
+        await refreshCaptureCadence()
 
         startCadenceTaskIfNeeded()
 
@@ -263,6 +264,7 @@ extension StreamContext {
         ) { [weak self] frame in
             self?.enqueueCapturedFrame(frame)
         }
+        await refreshCaptureCadence()
 
         startCadenceTaskIfNeeded()
 
@@ -391,6 +393,7 @@ extension StreamContext {
         ) { [weak self] frame in
             self?.enqueueCapturedFrame(frame)
         }
+        await refreshCaptureCadence()
 
         startCadenceTaskIfNeeded()
 

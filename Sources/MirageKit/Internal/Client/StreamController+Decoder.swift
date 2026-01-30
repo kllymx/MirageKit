@@ -20,6 +20,8 @@ extension StreamController {
         reassembler.reset()
         metricsTracker.reset()
         lastMetricsLogTime = 0
+        lastDecodedFrameTime = 0
+        stopFreezeMonitor()
         await startFrameProcessingPipeline()
     }
     func logMetricsIfNeeded(decodedFPS: Double, receivedFPS: Double, droppedFrames: UInt64) {
