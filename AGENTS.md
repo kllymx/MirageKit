@@ -5,8 +5,8 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 
 ## Behavior Notes
 - MirageKit license: PolyForm Shield 1.0.0 with the line-of-business notice for dedicated remote window/desktop/secondary display/drawing-tablet streaming.
-- Streaming presets (60/120): low 0.24/0.18, medium 0.80/0.70, high 0.95/0.88, ultra 1.0.
-- Preset pixel format: ultra/high/medium 10-bit; low/lowLatency 8-bit.
+- Streaming presets (60/120): low 0.24/0.22, medium 0.85/0.78, high 0.95/0.88, ultra 1.0.
+- Preset pixel format: ultra/high/medium 10-bit; low 8-bit.
 - Preset color space: P3 except low.
 - Stream scale: client resolution scale; presets define encoder quality.
 - ProMotion preference: refresh override based on MTKView cadence, 120 when supported and enabled, otherwise 60.

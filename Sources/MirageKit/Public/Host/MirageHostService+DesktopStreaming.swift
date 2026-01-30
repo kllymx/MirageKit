@@ -132,8 +132,8 @@ extension MirageHostService {
         sharedVirtualDisplayGeneration = await SharedVirtualDisplayManager.shared.getDisplayGeneration()
         logDesktopStartStep("display bounds cached")
 
-        // Set up display mirroring so main display mirrors virtual display
-        // This makes the main display adopt the virtual display's resolution
+        // Set up display mirroring so physical displays mirror the virtual display.
+        // This lets the virtual display drive the streamed resolution.
         await setupDisplayMirroring(targetDisplayID: context.displayID)
         logDesktopStartStep("display mirroring configured")
 
@@ -378,9 +378,8 @@ extension MirageHostService {
         throw MirageError.protocolError("Failed to find main SCDisplay")
     }
 
-    /// Set up display mirroring so ALL displays mirror the virtual display
-    /// This allows the client to control the resolution - the virtual display is the source,
-    /// and all other displays adapt to show what the virtual display shows.
+    /// Set up display mirroring so physical displays mirror the virtual display.
+    /// This keeps the virtual display as the resolution source for streaming.
     func setupDisplayMirroring(targetDisplayID: CGDirectDisplayID) async {
         let displaysToMirror = CGVirtualDisplayBridge.getDisplaysToMirror(excludingDisplayID: targetDisplayID)
 

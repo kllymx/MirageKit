@@ -31,7 +31,7 @@ extension SharedVirtualDisplayManager {
         colorSpace: MirageColorSpace
     ) async throws -> DisplaySnapshot {
         let requestedRate = refreshRate
-        let refreshRate = resolvedRefreshRate(requestedRate)
+        let refreshRate = SharedVirtualDisplayManager.streamRefreshRate(for: requestedRate)
         let consumer = DisplayConsumer.stream(streamID)
 
         // Check if this consumer already has the display

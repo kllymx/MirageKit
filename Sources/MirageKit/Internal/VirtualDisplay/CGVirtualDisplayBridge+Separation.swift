@@ -27,6 +27,9 @@ extension CGVirtualDisplayBridge {
         if isMirageDisplay(displayID) {
             return true
         }
+        if CGDisplayIsBuiltin(displayID) != 0 {
+            return false
+        }
         let vendorID = CGDisplayVendorNumber(displayID)
         // Jump Desktop and similar remote desktop tools create displays with vendor 0
         // or use headless dummy plugs which may have various vendor IDs

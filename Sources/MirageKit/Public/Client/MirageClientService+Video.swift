@@ -135,6 +135,11 @@ extension MirageClientService {
                         }
 
                         let payload = data.dropFirst(MirageHeaderSize)
+                        if payload.count != Int(header.payloadLength) {
+                            MirageLogger.client("UDP payload length mismatch for stream \(streamID): header=\(header.payloadLength), actual=\(payload.count)")
+                            receiveNext()
+                            return
+                        }
                         reassembler.processPacket(payload, header: header)
                     }
                 }

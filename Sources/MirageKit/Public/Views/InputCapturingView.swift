@@ -208,6 +208,15 @@ public class InputCapturingView: UIView {
             while !Task.isCancelled {
                 if self.refreshModifierStateFromHardware() {
                     self.hardwareRefreshFailureCount = 0
+
+                    // Always send heartbeat while modifiers are held.
+                    // This keeps host timestamps fresh even when state is unchanged,
+                    // preventing the host's 0.5s timeout from clearing held modifiers.
+                    if !self.heldModifierKeys.isEmpty {
+                        let modifiers = self.keyboardModifiers
+                        self.lastSentModifiers = modifiers
+                        self.onInputEvent?(.flagsChanged(modifiers))
+                    }
                 } else {
                     self.hardwareRefreshFailureCount += 1
                     if self.hardwareRefreshFailureCount >= 3 {

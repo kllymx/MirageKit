@@ -13,10 +13,10 @@ import Foundation
 final class FramePacingController: @unchecked Sendable {
     private let lock = NSLock()
     private var targetFrameInterval: TimeInterval
-    private var lastFrameTime: CFAbsoluteTime = 0
+    private var nextEmitTime: CFAbsoluteTime = 0
+    private var lastEmitTime: CFAbsoluteTime = 0
     private var frameCount: UInt64 = 0
     private var droppedCount: UInt64 = 0
-    private let toleranceFactor: Double = 0.9
 
     init(targetFPS: Int) {
         let clamped = max(1, targetFPS)
@@ -27,7 +27,8 @@ final class FramePacingController: @unchecked Sendable {
         let clamped = max(1, targetFPS)
         lock.lock()
         targetFrameInterval = 1.0 / Double(clamped)
-        lastFrameTime = 0
+        nextEmitTime = 0
+        lastEmitTime = 0
         frameCount = 0
         droppedCount = 0
         lock.unlock()
@@ -36,24 +37,36 @@ final class FramePacingController: @unchecked Sendable {
     /// Check if a frame should be captured based on timing.
     func shouldCaptureFrame(at time: CFAbsoluteTime) -> Bool {
         lock.lock()
-        if lastFrameTime == 0 {
-            lastFrameTime = time
+        if nextEmitTime == 0 {
+            nextEmitTime = time + targetFrameInterval
+            lastEmitTime = time
             frameCount += 1
             lock.unlock()
             return true
         }
 
-        let elapsedSeconds = time - lastFrameTime
-        if elapsedSeconds >= targetFrameInterval * toleranceFactor {
-            lastFrameTime = time
+        if time < nextEmitTime {
+            droppedCount += 1
+            lock.unlock()
+            return false
+        }
+
+        let stallThreshold = targetFrameInterval * 4
+        if lastEmitTime > 0, time - lastEmitTime > stallThreshold {
+            nextEmitTime = time + targetFrameInterval
+            lastEmitTime = time
             frameCount += 1
             lock.unlock()
             return true
         }
 
-        droppedCount += 1
+        let elapsed = time - nextEmitTime
+        let intervals = max(1, Int(elapsed / targetFrameInterval) + 1)
+        nextEmitTime += targetFrameInterval * Double(intervals)
+        lastEmitTime = time
+        frameCount += 1
         lock.unlock()
-        return false
+        return true
     }
 
     /// Get statistics.

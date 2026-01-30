@@ -17,6 +17,12 @@ extension FrameReassembler {
         lock.unlock()
     }
 
+    func setFrameLossHandler(_ handler: @escaping @Sendable (StreamID) -> Void) {
+        lock.lock()
+        onFrameLoss = handler
+        lock.unlock()
+    }
+
     func updateExpectedDimensionToken(_ token: UInt16) {
         lock.lock()
         expectedDimensionToken = token
@@ -109,23 +115,30 @@ extension FrameReassembler {
             return
         }
 
-        let totalFragments = Int(header.fragmentCount)
+        let frameByteCount = resolvedFrameByteCount(header: header, maxPayloadSize: maxPayloadSize)
+        let dataFragmentCount = resolvedDataFragmentCount(
+            header: header,
+            frameByteCount: frameByteCount,
+            maxPayloadSize: maxPayloadSize
+        )
+        let usesHeaderByteCount = frameByteCount > 0
         let frame: PendingFrame
         if let existingFrame = pendingFrames[frameNumber] {
             frame = existingFrame
         } else {
-            let capacity = totalFragments * maxPayloadSize
+            let capacity = max(1, dataFragmentCount) * maxPayloadSize
             let buffer = bufferPool.acquire(capacity: capacity)
             frame = PendingFrame(
                 buffer: buffer,
-                receivedMap: Array(repeating: false, count: totalFragments),
+                receivedMap: Array(repeating: false, count: dataFragmentCount),
                 receivedCount: 0,
                 totalFragments: header.fragmentCount,
+                dataFragmentCount: dataFragmentCount,
                 isKeyframe: isKeyframePacket,
                 timestamp: header.timestamp,
                 receivedAt: Date(),
                 contentRect: header.contentRect,
-                expectedTotalBytes: capacity
+                expectedTotalBytes: usesHeaderByteCount ? frameByteCount : capacity
             )
             pendingFrames[frameNumber] = frame
         }
@@ -143,15 +156,37 @@ extension FrameReassembler {
 
         // Store fragment
         let fragmentIndex = Int(header.fragmentIndex)
-        if fragmentIndex >= 0 && fragmentIndex < frame.receivedMap.count {
+        let isParityFragment = header.flags.contains(.fecParity) || fragmentIndex >= frame.dataFragmentCount
+        if isParityFragment {
+            let parityIndex = max(0, fragmentIndex - frame.dataFragmentCount)
+            if frame.parityFragments[parityIndex] == nil {
+                frame.parityFragments[parityIndex] = data
+                frame.receivedParityCount += 1
+                tryRecoverMissingFragment(
+                    frame: frame,
+                    parityIndex: parityIndex,
+                    frameByteCount: frameByteCount
+                )
+            }
+        } else if fragmentIndex >= 0 && fragmentIndex < frame.receivedMap.count {
             if !frame.receivedMap[fragmentIndex] {
                 let offset = fragmentIndex * maxPayloadSize
                 frame.buffer.write(data, at: offset)
                 frame.receivedMap[fragmentIndex] = true
                 frame.receivedCount += 1
-                if fragmentIndex == frame.receivedMap.count - 1 {
+                if !usesHeaderByteCount, fragmentIndex == frame.receivedMap.count - 1 {
                     let end = offset + data.count
                     frame.expectedTotalBytes = min(end, frame.buffer.capacity)
+                }
+                if let parityIndex = parityIndexForDataFragment(
+                    fragmentIndex: fragmentIndex,
+                    frame: frame
+                ) {
+                    tryRecoverMissingFragment(
+                        frame: frame,
+                        parityIndex: parityIndex,
+                        frameByteCount: frameByteCount
+                    )
                 }
             }
         }
@@ -159,7 +194,7 @@ extension FrameReassembler {
         // Log keyframe assembly progress for diagnostics
         if frame.isKeyframe {
             let receivedCount = frame.receivedCount
-            let totalCount = Int(frame.totalFragments)
+            let totalCount = frame.dataFragmentCount
             // Log at key milestones: first packet, 25%, 50%, 75%, and when nearly complete
             if receivedCount == 1 || receivedCount == totalCount / 4 || receivedCount == totalCount / 2 ||
                receivedCount == (totalCount * 3) / 4 || receivedCount == totalCount - 1 {
@@ -168,14 +203,21 @@ extension FrameReassembler {
         }
 
         // Check if frame is complete
-        if frame.receivedCount == Int(frame.totalFragments) {
+        if frame.receivedCount == frame.dataFragmentCount {
             completedFrame = completeFrameLocked(frameNumber: frameNumber, frame: frame)
             completionHandler = onFrameComplete
         }
 
         // Clean up old pending frames
-        cleanupOldFramesLocked()
+        let didTimeout = cleanupOldFramesLocked()
         lock.unlock()
+
+        if didTimeout {
+            beginAwaitingKeyframe()
+            if let onFrameLoss {
+                onFrameLoss(streamID)
+            }
+        }
 
         if let completedFrame, let completionHandler {
             completionHandler(
@@ -293,7 +335,7 @@ extension FrameReassembler {
         return diff != 0 && diff < 0x8000
     }
 
-    private func cleanupOldFramesLocked() {
+    private func cleanupOldFramesLocked() -> Bool {
         let now = Date()
         // P-frame timeout: 500ms - allows time for UDP packet jitter without dropping frames
         let pFrameTimeout: TimeInterval = 0.5
@@ -308,7 +350,7 @@ extension FrameReassembler {
             if !shouldKeep {
                 // Log timeout with fragment completion info for debugging
                 let receivedCount = frame.receivedCount
-                let totalCount = frame.totalFragments
+                let totalCount = frame.dataFragmentCount
                 let isKeyframe = frame.isKeyframe
                 MirageLogger.log(.frameAssembly, "Frame \(frameNumber) timed out: \(receivedCount)/\(totalCount) fragments\(isKeyframe ? " (KEYFRAME)" : "")")
                 timedOutCount += 1
@@ -323,6 +365,8 @@ extension FrameReassembler {
             }
         }
         droppedFrameCount += timedOutCount
+        let shouldSignalLoss = timedOutCount > 0 && !awaitingKeyframe
+        return shouldSignalLoss
     }
 
     func shouldRequestKeyframe() -> Bool {
@@ -391,5 +435,116 @@ extension FrameReassembler {
     private func clearAwaitingKeyframe() {
         awaitingKeyframe = false
         awaitingKeyframeSince = 0
+    }
+
+    private func resolvedFrameByteCount(header: FrameHeader, maxPayloadSize: Int) -> Int {
+        let byteCount = Int(header.frameByteCount)
+        if byteCount > 0 {
+            return byteCount
+        }
+        let fragments = Int(header.fragmentCount)
+        return max(0, fragments * maxPayloadSize)
+    }
+
+    private func resolvedDataFragmentCount(
+        header: FrameHeader,
+        frameByteCount: Int,
+        maxPayloadSize: Int
+    ) -> Int {
+        guard maxPayloadSize > 0 else { return Int(header.fragmentCount) }
+        if frameByteCount > 0 {
+            return (frameByteCount + maxPayloadSize - 1) / maxPayloadSize
+        }
+        return Int(header.fragmentCount)
+    }
+
+    private func parityIndexForDataFragment(fragmentIndex: Int, frame: PendingFrame) -> Int? {
+        let parityCount = Int(frame.totalFragments) - frame.dataFragmentCount
+        guard parityCount > 0 else { return nil }
+        let blockSize = frame.isKeyframe ? keyframeFECBlockSize : pFrameFECBlockSize
+        guard blockSize > 1 else { return nil }
+        let blockIndex = fragmentIndex / blockSize
+        guard blockIndex < parityCount else { return nil }
+        return blockIndex
+    }
+
+    private func payloadLength(
+        for fragmentIndex: Int,
+        frameByteCount: Int,
+        maxPayloadSize: Int
+    ) -> Int {
+        guard maxPayloadSize > 0 else { return 0 }
+        let start = fragmentIndex * maxPayloadSize
+        let remaining = max(0, frameByteCount - start)
+        return min(maxPayloadSize, remaining)
+    }
+
+    private func tryRecoverMissingFragment(
+        frame: PendingFrame,
+        parityIndex: Int,
+        frameByteCount: Int
+    ) {
+        guard let parityData = frame.parityFragments[parityIndex] else { return }
+        let blockSize = frame.isKeyframe ? keyframeFECBlockSize : pFrameFECBlockSize
+        guard blockSize > 1 else { return }
+
+        let blockStart = parityIndex * blockSize
+        let blockEnd = min(blockStart + blockSize, frame.dataFragmentCount)
+        guard blockStart < blockEnd else { return }
+
+        var missingIndex: Int?
+        for index in blockStart..<blockEnd {
+            if !frame.receivedMap[index] {
+                if missingIndex != nil {
+                    return
+                }
+                missingIndex = index
+            }
+        }
+        guard let recoverIndex = missingIndex else { return }
+
+        let effectiveFrameByteCount = frameByteCount > 0 ? frameByteCount : frame.expectedTotalBytes
+        let expectedLength = payloadLength(
+            for: recoverIndex,
+            frameByteCount: effectiveFrameByteCount,
+            maxPayloadSize: maxPayloadSize
+        )
+        guard expectedLength > 0 else { return }
+
+        var recovered = Data(repeating: 0, count: expectedLength)
+        recovered.withUnsafeMutableBytes { recoveredBytes in
+            let recoveredPtr = recoveredBytes.bindMemory(to: UInt8.self)
+            guard let recoveredBase = recoveredPtr.baseAddress else { return }
+            parityData.withUnsafeBytes { parityBytes in
+                let parityPtr = parityBytes.bindMemory(to: UInt8.self)
+                guard let parityBase = parityPtr.baseAddress else { return }
+                let copyLength = min(parityData.count, expectedLength)
+                recoveredBase.update(from: parityBase, count: copyLength)
+            }
+            frame.buffer.withUnsafeBytes { buffer in
+                guard let bufferBase = buffer.baseAddress else { return }
+                let bufferPtr = bufferBase.assumingMemoryBound(to: UInt8.self)
+                for index in blockStart..<blockEnd where index != recoverIndex && frame.receivedMap[index] {
+                    let fragmentLength = payloadLength(
+                        for: index,
+                        frameByteCount: effectiveFrameByteCount,
+                        maxPayloadSize: maxPayloadSize
+                    )
+                    guard fragmentLength > 0 else { continue }
+                    let offset = index * maxPayloadSize
+                    let source = bufferPtr.advanced(by: offset)
+                    let bytesToXor = min(fragmentLength, expectedLength)
+                    for i in 0..<bytesToXor {
+                        recoveredBase[i] ^= source[i]
+                    }
+                }
+            }
+        }
+
+        let offset = recoverIndex * maxPayloadSize
+        frame.buffer.write(recovered, at: offset)
+        frame.receivedMap[recoverIndex] = true
+        frame.receivedCount += 1
+        MirageLogger.log(.frameAssembly, "Recovered fragment \(recoverIndex) via FEC (block \(parityIndex))")
     }
 }

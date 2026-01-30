@@ -173,6 +173,8 @@ actor StreamController {
         await decoder.setErrorThresholdHandler { [weak self] in
             guard let self else { return }
             Task {
+                self.reassembler.enterKeyframeOnlyMode()
+                await self.updateInputBlocking(true)
                 await self.onKeyframeNeeded?()
             }
         }
@@ -266,6 +268,14 @@ actor StreamController {
             }
         }
         reassembler.setFrameHandler(reassemblerHandler)
+        reassembler.setFrameLossHandler { [weak self] _ in
+            guard let self else { return }
+            Task {
+                self.reassembler.enterKeyframeOnlyMode()
+                await self.updateInputBlocking(true)
+                await self.onKeyframeNeeded?()
+            }
+        }
     }
 
     func stopFrameProcessingPipeline() {

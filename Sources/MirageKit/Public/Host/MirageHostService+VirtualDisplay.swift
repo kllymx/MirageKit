@@ -211,15 +211,26 @@ extension MirageHostService {
         // Desktop streaming needs to resize the entire virtual display and update capture
         if streamID == desktopStreamID, let desktopContext = desktopStreamContext {
             do {
+                let targetFrameRate = await desktopContext.getTargetFrameRate()
+                let streamRefreshRate = SharedVirtualDisplayManager.streamRefreshRate(for: targetFrameRate)
+
+                if let snapshot = await SharedVirtualDisplayManager.shared.getDisplaySnapshot() {
+                    let currentResolution = snapshot.resolution
+                    let currentRefresh = Int(snapshot.refreshRate.rounded())
+                    if currentResolution == newResolution && currentRefresh == streamRefreshRate {
+                        MirageLogger.host("Desktop stream resize skipped (already \(Int(newResolution.width))x\(Int(newResolution.height))@\(streamRefreshRate)Hz)")
+                        return
+                    }
+                }
+
                 MirageLogger.host("Desktop stream resize requested: \(Int(newResolution.width))x\(Int(newResolution.height))")
 
                 // 1. Update the virtual display resolution in place (no recreate, no displayID change)
                 //    This uses applySettings: to change the display mode without destroying it
-                let targetFrameRate = await desktopContext.getTargetFrameRate()
                 try await SharedVirtualDisplayManager.shared.updateDisplayResolution(
                     for: .desktopStream,
                     newResolution: newResolution,
-                    refreshRate: targetFrameRate
+                    refreshRate: streamRefreshRate
                 )
 
                 // 2. Update the capture/encoder dimensions to match new resolution
@@ -229,7 +240,7 @@ extension MirageHostService {
                     height: Int(newResolution.height)
                 )
 
-                // 3. Update input cache with main display bounds (since main mirrors virtual)
+                // 3. Update input cache with main display bounds (main display mirrors virtual)
                 // Input is injected at main display coordinates, not virtual display coordinates
                 let mainDisplayBounds = CGDisplayBounds(CGMainDisplayID())
                 inputStreamCacheActor.updateWindowFrame(streamID, newFrame: mainDisplayBounds)

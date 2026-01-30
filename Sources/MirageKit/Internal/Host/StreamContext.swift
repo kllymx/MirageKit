@@ -165,6 +165,11 @@ actor StreamContext {
     var keyframeMaxIntervalSeconds: CFAbsoluteTime = 0
     var lastKeyframeTime: CFAbsoluteTime = 0
 
+    /// Loss-mode deadline for adaptive redundancy and pacing.
+    /// When active, keyframes and P-frames include FEC parity fragments.
+    nonisolated(unsafe) var lossModeDeadline: CFAbsoluteTime = 0
+    let lossModeHold: CFAbsoluteTime = 10.0
+
     /// Frame rate for cadence and queue limits
     var currentFrameRate: Int
     /// Frame rate requested from ScreenCaptureKit.
@@ -263,7 +268,7 @@ actor StreamContext {
         self.captureFrameRate = encoderConfig.targetFrameRate
         self.activePixelFormat = encoderConfig.pixelFormat
         let prefersSmoothness = latencyMode == .smoothest
-        let latencySensitive = latencyMode == .lowestLatency || qualityPreset == .lowLatency
+        let latencySensitive = latencyMode == .lowestLatency
         self.useLowLatencyPipeline = latencySensitive || (encoderConfig.targetFrameRate >= 120 && !prefersSmoothness)
         let bufferDepth = Self.frameBufferDepth(
             useLowLatencyPipeline: useLowLatencyPipeline,

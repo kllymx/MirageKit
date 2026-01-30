@@ -78,6 +78,25 @@ extension StreamContext {
     func updateResolution(width: Int, height: Int) async throws {
         guard isRunning else { return }
 
+        let requestedBaseSize = CGSize(width: width, height: height)
+        guard requestedBaseSize.width > 0, requestedBaseSize.height > 0 else { return }
+
+        let candidateScale = resolvedStreamScale(
+            for: requestedBaseSize,
+            requestedScale: requestedStreamScale * adaptiveScale,
+            logLabel: nil
+        )
+        let candidateScaledWidth = StreamContext.alignedEvenPixel(requestedBaseSize.width * candidateScale)
+        let candidateScaledHeight = StreamContext.alignedEvenPixel(requestedBaseSize.height * candidateScale)
+        let candidateOutputSize = CGSize(width: CGFloat(candidateScaledWidth), height: CGFloat(candidateScaledHeight))
+
+        if requestedBaseSize == baseCaptureSize,
+           candidateScale == streamScale,
+           candidateOutputSize == currentEncodedSize {
+            MirageLogger.stream("Resolution update skipped (no change)")
+            return
+        }
+
         isResizing = true
         defer { isResizing = false }
 
@@ -88,15 +107,17 @@ extension StreamContext {
         await packetSender?.bumpGeneration(reason: "resolution update")
         resetPipelineStateForReconfiguration(reason: "resolution update")
 
-        baseCaptureSize = CGSize(width: width, height: height)
-        streamScale = resolvedStreamScale(
-            for: baseCaptureSize,
+        let resolvedScaleForUpdate = resolvedStreamScale(
+            for: requestedBaseSize,
             requestedScale: requestedStreamScale * adaptiveScale,
             logLabel: "Resolution cap"
         )
-        let outputSize = scaledOutputSize(for: baseCaptureSize)
-        let scaledWidth = Int(outputSize.width)
-        let scaledHeight = Int(outputSize.height)
+        let scaledWidth = StreamContext.alignedEvenPixel(requestedBaseSize.width * resolvedScaleForUpdate)
+        let scaledHeight = StreamContext.alignedEvenPixel(requestedBaseSize.height * resolvedScaleForUpdate)
+        let outputSize = CGSize(width: CGFloat(scaledWidth), height: CGFloat(scaledHeight))
+
+        baseCaptureSize = requestedBaseSize
+        streamScale = resolvedScaleForUpdate
         captureMode = .display
 
         MirageLogger.stream("Updating to client-requested resolution: \(width)x\(height) (scaled \(scaledWidth)x\(scaledHeight)) (frames paused)")

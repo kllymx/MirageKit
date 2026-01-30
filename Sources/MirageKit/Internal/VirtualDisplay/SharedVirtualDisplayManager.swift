@@ -123,7 +123,7 @@ actor SharedVirtualDisplayManager {
     static let preferredStreamRefreshRate: Int = 120
 
     static func streamRefreshRate(for targetFrameRate: Int) -> Int {
-        max(preferredStreamRefreshRate, max(1, targetFrameRate))
+        preferredStreamRefreshRate
     }
     func resolvedRefreshRate(_ requested: Int) -> Int {
         if requested >= 120 {

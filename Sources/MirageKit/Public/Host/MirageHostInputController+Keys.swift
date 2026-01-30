@@ -68,12 +68,15 @@ extension MirageHostInputController {
 
         var releaseFlags = cumulativeFlags
         for (flag, keyCode) in Self.modifierKeyCodes where newlyReleased.contains(keyCode) {
+            // Remove flag BEFORE posting so the event flags reflect the post-release state.
+            // When physically releasing a key, macOS expects the key-up event to NOT contain
+            // the modifier being released (e.g., releasing Command should have empty flags).
+            releaseFlags.remove(flag)
             if let keyEvent = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) {
                 keyEvent.flags = releaseFlags.cgEventFlags
                 postEvent(keyEvent)
                 heldModifierKeyCodes.remove(keyCode)
             }
-            releaseFlags.remove(flag)
         }
 
         if let cgEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) {

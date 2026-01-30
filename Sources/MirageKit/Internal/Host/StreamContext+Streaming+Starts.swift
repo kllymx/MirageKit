@@ -72,7 +72,14 @@ extension StreamContext {
             let frameNum = localFrameNumber
             let seqStart = localSequenceNumber
 
-            let totalFragments = (encodedData.count + maxPayloadSize - 1) / maxPayloadSize
+            let now = CFAbsoluteTimeGetCurrent()
+            let lossModeActive = self.isLossModeActive(now: now)
+            let fecBlockSize = lossModeActive ? (isKeyframe ? 8 : 16) : 0
+            let frameByteCount = encodedData.count
+            let dataFragments = (frameByteCount + maxPayloadSize - 1) / maxPayloadSize
+            let parityFragments = fecBlockSize > 1 ? (dataFragments + fecBlockSize - 1) / fecBlockSize : 0
+            let totalFragments = dataFragments + parityFragments
+            let wireBytes = frameByteCount + parityFragments * maxPayloadSize
             localSequenceNumber += UInt32(totalFragments)
             localFrameNumber += 1
 
@@ -89,6 +96,7 @@ extension StreamContext {
             }
             let workItem = StreamPacketSender.WorkItem(
                 encodedData: encodedData,
+                frameByteCount: frameByteCount,
                 isKeyframe: isKeyframe,
                 presentationTime: presentationTime,
                 contentRect: contentRect,
@@ -98,6 +106,9 @@ extension StreamContext {
                 additionalFlags: flags,
                 dimensionToken: dimToken,
                 epoch: epoch,
+                fecBlockSize: fecBlockSize,
+                lossMode: lossModeActive,
+                wireBytes: wireBytes,
                 logPrefix: "Frame",
                 generation: generation,
                 onSendStart: nil,
@@ -188,7 +199,14 @@ extension StreamContext {
             let frameNum = localFrameNumber
             let seqStart = localSequenceNumber
 
-            let totalFragments = (encodedData.count + maxPayloadSize - 1) / maxPayloadSize
+            let now = CFAbsoluteTimeGetCurrent()
+            let lossModeActive = self.isLossModeActive(now: now)
+            let fecBlockSize = lossModeActive ? (isKeyframe ? 8 : 16) : 0
+            let frameByteCount = encodedData.count
+            let dataFragments = (frameByteCount + maxPayloadSize - 1) / maxPayloadSize
+            let parityFragments = fecBlockSize > 1 ? (dataFragments + fecBlockSize - 1) / fecBlockSize : 0
+            let totalFragments = dataFragments + parityFragments
+            let wireBytes = frameByteCount + parityFragments * maxPayloadSize
             localSequenceNumber += UInt32(totalFragments)
             localFrameNumber += 1
 
@@ -205,6 +223,7 @@ extension StreamContext {
             }
             let workItem = StreamPacketSender.WorkItem(
                 encodedData: encodedData,
+                frameByteCount: frameByteCount,
                 isKeyframe: isKeyframe,
                 presentationTime: presentationTime,
                 contentRect: contentRect,
@@ -214,6 +233,9 @@ extension StreamContext {
                 additionalFlags: flags,
                 dimensionToken: dimToken,
                 epoch: epoch,
+                fecBlockSize: fecBlockSize,
+                lossMode: lossModeActive,
+                wireBytes: wireBytes,
                 logPrefix: "Login frame",
                 generation: generation,
                 onSendStart: nil,
@@ -304,7 +326,14 @@ extension StreamContext {
             let contentRect = self.currentContentRect
             let frameNum = localFrameNumber
             let seqStart = localSequenceNumber
-            let totalFragments = (encodedData.count + maxPayloadSize - 1) / maxPayloadSize
+            let now = CFAbsoluteTimeGetCurrent()
+            let lossModeActive = self.isLossModeActive(now: now)
+            let fecBlockSize = lossModeActive ? (isKeyframe ? 8 : 16) : 0
+            let frameByteCount = encodedData.count
+            let dataFragments = (frameByteCount + maxPayloadSize - 1) / maxPayloadSize
+            let parityFragments = fecBlockSize > 1 ? (dataFragments + fecBlockSize - 1) / fecBlockSize : 0
+            let totalFragments = dataFragments + parityFragments
+            let wireBytes = frameByteCount + parityFragments * maxPayloadSize
             localSequenceNumber += UInt32(totalFragments)
             localFrameNumber += 1
 
@@ -321,6 +350,7 @@ extension StreamContext {
             }
             let workItem = StreamPacketSender.WorkItem(
                 encodedData: encodedData,
+                frameByteCount: frameByteCount,
                 isKeyframe: isKeyframe,
                 presentationTime: presentationTime,
                 contentRect: contentRect,
@@ -330,6 +360,9 @@ extension StreamContext {
                 additionalFlags: flags,
                 dimensionToken: dimToken,
                 epoch: epoch,
+                fecBlockSize: fecBlockSize,
+                lossMode: lossModeActive,
+                wireBytes: wireBytes,
                 logPrefix: "Desktop frame",
                 generation: generation,
                 onSendStart: nil,

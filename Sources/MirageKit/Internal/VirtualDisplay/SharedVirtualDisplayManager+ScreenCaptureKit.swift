@@ -66,9 +66,8 @@ extension SharedVirtualDisplayManager {
     }
 
     /// Find the SCDisplay for the main display (used for desktop streaming capture).
-    /// When mirroring is active, content renders on the main display even though it shows
-    /// the virtual display's content. Capturing the main display ensures SCK sees actual
-    /// content changes rather than the mirrored virtual display which may update sporadically.
+    /// When mirroring is active, capturing the main display can avoid mirrored-display
+    /// cadence issues that sometimes appear on virtual targets.
     func findMainSCDisplay() async throws -> SCDisplayWrapper {
         let mainDisplayID = CGMainDisplayID()
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)

@@ -90,24 +90,6 @@ public struct MirageEncoderConfiguration: Sendable {
         keyframeQuality: 0.65
     )
 
-    /// Configuration optimized for low-latency text applications
-    /// Achieves NVIDIA GameStream-competitive latency through:
-    /// - Longer keyframe interval (fewer large frames to fragment)
-    /// - Lower quality (30-50% smaller frames)
-    /// - Aggressive frame skipping (always-latest-frame strategy)
-    /// - 8-bit pixel format for faster encode
-    /// Best for: IDEs, text editors, terminals - any app where responsiveness matters
-    public static let lowLatency = MirageEncoderConfiguration(
-        codec: .hevc,
-        targetFrameRate: 120,
-        keyFrameInterval: 3_600,
-        colorSpace: .sRGB,
-        scaleFactor: 2.0,
-        pixelFormat: .nv12,
-        frameQuality: 0.85,
-        keyframeQuality: 0.65
-    )
-
     /// Create a copy with multiple encoder setting overrides
     /// Use this for full client control over encoding parameters
     public func withOverrides(
@@ -295,7 +277,6 @@ public enum MirageQualityPreset: String, Sendable, CaseIterable, Codable {
     case high        // High quality
     case medium      // Balanced quality
     case low         // Low quality
-    case lowLatency  // Optimized for text apps - aggressive frame skipping, full quality
     case custom      // User-defined overrides
 
     public var displayName: String {
@@ -304,7 +285,6 @@ public enum MirageQualityPreset: String, Sendable, CaseIterable, Codable {
         case .high: return "High"
         case .medium: return "Medium"
         case .low: return "Low"
-        case .lowLatency: return "Low Latency"
         case .custom: return "Custom"
         }
     }
@@ -343,10 +323,10 @@ public enum MirageQualityPreset: String, Sendable, CaseIterable, Codable {
                 keyFrameInterval: keyFrameInterval,
                 colorSpace: .displayP3,
                 pixelFormat: .p010,
-                minBitrate: bitrateMbps(isHighRefresh ? 85 : 50),
-                maxBitrate: bitrateMbps(isHighRefresh ? 85 : 50),
-                frameQuality: isHighRefresh ? 0.70 : 0.80,
-                keyframeQuality: isHighRefresh ? 0.60 : 0.70
+                minBitrate: bitrateMbps(isHighRefresh ? 100 : 70),
+                maxBitrate: bitrateMbps(isHighRefresh ? 100 : 70),
+                frameQuality: isHighRefresh ? 0.78 : 0.85,
+                keyframeQuality: isHighRefresh ? 0.68 : 0.75
             )
         case .low:
             return MirageEncoderConfiguration(
@@ -358,25 +338,15 @@ public enum MirageQualityPreset: String, Sendable, CaseIterable, Codable {
                 frameQuality: isHighRefresh ? 0.18 : 0.24,
                 keyframeQuality: isHighRefresh ? 0.18 : 0.24
             )
-        case .lowLatency:
-            return MirageEncoderConfiguration(
-                keyFrameInterval: keyFrameInterval,
-                colorSpace: .sRGB,
-                pixelFormat: .nv12,
-                minBitrate: bitrateMbps(150),
-                maxBitrate: bitrateMbps(150),
-                frameQuality: 0.85,
-                keyframeQuality: 0.65
-            )
         case .custom:
             return MirageEncoderConfiguration(
                 keyFrameInterval: keyFrameInterval,
                 colorSpace: .displayP3,
                 pixelFormat: .p010,
-                minBitrate: bitrateMbps(isHighRefresh ? 85 : 50),
-                maxBitrate: bitrateMbps(isHighRefresh ? 85 : 50),
-                frameQuality: isHighRefresh ? 0.70 : 0.80,
-                keyframeQuality: isHighRefresh ? 0.60 : 0.70
+                minBitrate: bitrateMbps(isHighRefresh ? 100 : 70),
+                maxBitrate: bitrateMbps(isHighRefresh ? 100 : 70),
+                frameQuality: isHighRefresh ? 0.78 : 0.85,
+                keyframeQuality: isHighRefresh ? 0.68 : 0.75
             )
         }
     }

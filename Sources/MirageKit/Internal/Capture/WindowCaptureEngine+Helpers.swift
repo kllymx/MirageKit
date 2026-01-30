@@ -41,12 +41,12 @@ extension WindowCaptureEngine {
             return 4
         case .smoothest:
             if currentFrameRate >= 120 {
-                return 10
+                return 12
             }
             if currentFrameRate >= 60 {
-                return 8
+                return 10
             }
-            return 6
+            return 8
         }
     }
 
@@ -78,10 +78,9 @@ extension WindowCaptureEngine {
 
     func minimumFrameIntervalRate() -> Int {
         if let refreshRate = currentDisplayRefreshRate, refreshRate > 0 {
-            // Never request a faster cadence than our target capture rate.
-            // Using the display refresh rate here can make SCK deliver at 120Hz,
-            // forcing the pacing controller to drop roughly half the frames.
-            return min(currentFrameRate, refreshRate)
+            // ScreenCaptureKit cadence follows the higher of target FPS and display refresh.
+            // The pacing controller still caps delivery to currentFrameRate.
+            return max(currentFrameRate, refreshRate)
         }
         return currentFrameRate
     }

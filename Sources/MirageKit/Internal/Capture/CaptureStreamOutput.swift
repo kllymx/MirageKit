@@ -54,8 +54,6 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private var pacingDropsWindowCount: UInt64 = 0
     private var rawFrameWindowCount: UInt64 = 0
     private var rawFrameWindowStartTime: CFAbsoluteTime = 0
-    private var pacingAnchorPTS: CMTime?
-    private var pacingAnchorWallTime: CFAbsoluteTime = 0
 
     private let poolMinimumBufferCount: Int
     private let frameCopier: CaptureFrameCopier?
@@ -190,30 +188,9 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         fallbackLock.unlock()
     }
 
-    /// Use SCK's presentation timestamps for pacing when available.
-    /// This decouples pacing decisions from callback scheduling jitter.
-    private func pacingTime(for sampleBuffer: CMSampleBuffer, wallTime: CFAbsoluteTime) -> CFAbsoluteTime {
-        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        guard pts.isValid, pts.isNumeric else { return wallTime }
-        if pacingAnchorPTS == nil {
-            pacingAnchorPTS = pts
-            pacingAnchorWallTime = wallTime
-            return wallTime
-        }
-        let delta = CMTimeSubtract(pts, pacingAnchorPTS!)
-        let seconds = CMTimeGetSeconds(delta)
-        guard seconds.isFinite, seconds >= 0 else {
-            pacingAnchorPTS = pts
-            pacingAnchorWallTime = wallTime
-            return wallTime
-        }
-        return pacingAnchorWallTime + seconds
-    }
-
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         let wallTime = CFAbsoluteTimeGetCurrent()  // Timing: when SCK delivered the frame
         let captureTime = wallTime
-        let pacingTime = pacingTime(for: sampleBuffer, wallTime: wallTime)
 
         // NOTE: lastDeliveredFrameTime is updated ONLY for .complete frames (below)
         // This allows the watchdog to continue firing during drags when SCK only sends .idle frames
@@ -275,7 +252,7 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
             }
         }
 
-        if let framePacer, !framePacer.shouldCaptureFrame(at: pacingTime) {
+        if let framePacer, !framePacer.shouldCaptureFrame(at: captureTime) {
             lastDeliveredFrameTime = captureTime
             stallSignaled = false
             pacingDropsWindowCount += 1

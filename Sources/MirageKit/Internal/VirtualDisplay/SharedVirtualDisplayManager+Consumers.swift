@@ -29,7 +29,9 @@ extension SharedVirtualDisplayManager {
         colorSpace: MirageColorSpace = .displayP3
     ) async throws -> DisplaySnapshot {
         let requestedRate = refreshRate
-        let refreshRate = resolvedRefreshRate(requestedRate)
+        let refreshRate = consumer == .desktopStream
+            ? SharedVirtualDisplayManager.streamRefreshRate(for: requestedRate)
+            : resolvedRefreshRate(requestedRate)
         // Use provided resolution or fall back to default
         let targetResolution = resolution ?? CGSize(width: 2880, height: 1800)
         let previousGeneration = sharedDisplay?.generation ?? 0
@@ -115,7 +117,7 @@ extension SharedVirtualDisplayManager {
         refreshRate: Int = 60
     ) async throws {
         let requestedRate = refreshRate
-        let refreshRate = resolvedRefreshRate(requestedRate)
+        let refreshRate = SharedVirtualDisplayManager.streamRefreshRate(for: requestedRate)
         let consumer = DisplayConsumer.stream(streamID)
         let previousGeneration = sharedDisplay?.generation ?? 0
         guard var clientInfo = activeConsumers[consumer] else {
@@ -184,13 +186,14 @@ extension SharedVirtualDisplayManager {
         let previousGeneration = display.generation
 
         let requestedColorSpace = existingInfo.colorSpace
-        // Update stored resolution for this consumer
         activeConsumers[consumer] = ClientDisplayInfo(
             resolution: newResolution,
             windowID: existingInfo.windowID,
             colorSpace: requestedColorSpace,
             acquiredAt: existingInfo.acquiredAt
         )
+
+        // Check for color space mismatch - requires recreation
         if display.colorSpace != requestedColorSpace {
             MirageLogger.host("Display color space mismatch (\(display.colorSpace.displayName) → \(requestedColorSpace.displayName)); recreating")
             sharedDisplay = try await recreateDisplay(newResolution: newResolution, refreshRate: refreshRate, colorSpace: requestedColorSpace)
@@ -198,39 +201,27 @@ extension SharedVirtualDisplayManager {
             return
         }
 
-        MirageLogger.host("Updating display \(display.displayID) for \(consumer) to \(Int(newResolution.width))x\(Int(newResolution.height))")
+        // Check if refresh rate or resolution needs updating
+        let needsRefresh = display.refreshRate != Double(refreshRate)
+        let requiresResize = needsResize(currentResolution: display.resolution, targetResolution: newResolution)
 
-        // Try to update the existing display's resolution in place
-        // This avoids display leak issues and is faster than destroy/recreate
-        let success = CGVirtualDisplayBridge.updateDisplayResolution(
-            display: display.displayRef.value,
-            width: Int(newResolution.width),
-            height: Int(newResolution.height),
-            refreshRate: Double(refreshRate),
-            hiDPI: true
-        )
+        if needsRefresh || requiresResize {
+            MirageLogger.host("Updating display \(display.displayID) for \(consumer) to \(Int(newResolution.width))x\(Int(newResolution.height))@\(refreshRate)Hz")
 
-        if success {
-            // Update our stored resolution
-            sharedDisplay = ManagedDisplayContext(
-                displayID: display.displayID,
-                spaceID: display.spaceID,
-                resolution: newResolution,
-                refreshRate: Double(refreshRate),
-                colorSpace: display.colorSpace,
-                generation: display.generation,
-                createdAt: display.createdAt,
-                displayRef: display.displayRef  // Keep same reference
+            let updated = await updateDisplayInPlace(
+                newResolution: newResolution,
+                refreshRate: refreshRate,
+                colorSpace: requestedColorSpace
             )
-            MirageLogger.host("Display resolution updated in place to \(Int(newResolution.width))x\(Int(newResolution.height))")
 
-            await MainActor.run {
-                VirtualDisplayKeepaliveController.shared.update(displayID: display.displayID)
+            if !updated {
+                if needsRefresh {
+                    MirageLogger.host("In-place refresh rate update failed, recreating display")
+                } else {
+                    MirageLogger.host("In-place resize failed, recreating display")
+                }
+                sharedDisplay = try await recreateDisplay(newResolution: newResolution, refreshRate: refreshRate, colorSpace: requestedColorSpace)
             }
-        } else {
-            // Fallback to recreate if in-place update fails
-            MirageLogger.host("In-place update failed, falling back to recreate")
-            sharedDisplay = try await recreateDisplay(newResolution: newResolution, refreshRate: refreshRate, colorSpace: requestedColorSpace)
         }
 
         notifyGenerationChangeIfNeeded(previousGeneration: previousGeneration)

@@ -249,38 +249,52 @@ final class FrameReassembler: @unchecked Sendable {
     var packetsDiscardedAwaitingKeyframe: UInt64 = 0
     var packetsDiscardedEpoch: UInt64 = 0
     var lastStatsLog: UInt64 = 0
+    let keyframeFECBlockSize: Int = 8
+    let pFrameFECBlockSize: Int = 16
+
+    /// Callback for loss events (frame timeouts).
+    var onFrameLoss: (@Sendable (StreamID) -> Void)?
 
     final class PendingFrame {
         let buffer: FrameBufferPool.Buffer
         var receivedMap: [Bool]
         var receivedCount: Int
         let totalFragments: UInt16
+        let dataFragmentCount: Int
         var isKeyframe: Bool
         let timestamp: UInt64
         let receivedAt: Date
         let contentRect: CGRect
         var expectedTotalBytes: Int
+        var parityFragments: [Int: Data]
+        var receivedParityCount: Int
 
         init(
             buffer: FrameBufferPool.Buffer,
             receivedMap: [Bool],
             receivedCount: Int,
             totalFragments: UInt16,
+            dataFragmentCount: Int,
             isKeyframe: Bool,
             timestamp: UInt64,
             receivedAt: Date,
             contentRect: CGRect,
-            expectedTotalBytes: Int
+            expectedTotalBytes: Int,
+            parityFragments: [Int: Data] = [:],
+            receivedParityCount: Int = 0
         ) {
             self.buffer = buffer
             self.receivedMap = receivedMap
             self.receivedCount = receivedCount
             self.totalFragments = totalFragments
+            self.dataFragmentCount = dataFragmentCount
             self.isKeyframe = isKeyframe
             self.timestamp = timestamp
             self.receivedAt = receivedAt
             self.contentRect = contentRect
             self.expectedTotalBytes = expectedTotalBytes
+            self.parityFragments = parityFragments
+            self.receivedParityCount = receivedParityCount
         }
     }
 

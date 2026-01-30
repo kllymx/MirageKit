@@ -95,6 +95,7 @@ extension StreamContext {
     func forceKeyframeAfterCaptureRestart() {
         keyframeSendDeadline = 0
         lastKeyframeRequestTime = 0
+        noteLossEvent(reason: "Capture restart")
         let queued = queueKeyframe(
             reason: "Fallback keyframe",
             checkInFlight: false,
@@ -192,6 +193,19 @@ extension StreamContext {
         }
     }
 
+    func noteLossEvent(reason: String) {
+        let now = CFAbsoluteTimeGetCurrent()
+        let deadline = now + lossModeHold
+        if deadline > lossModeDeadline {
+            lossModeDeadline = deadline
+        }
+        MirageLogger.stream("Loss mode extended to \(Int((lossModeDeadline - now) * 1000))ms (\(reason))")
+    }
+
+    nonisolated func isLossModeActive(now: CFAbsoluteTime) -> Bool {
+        now < lossModeDeadline
+    }
+
     /// Request a keyframe from the encoder.
     func requestKeyframe() async {
         if queueKeyframe(
@@ -202,6 +216,7 @@ extension StreamContext {
             advanceEpochOnReset: false,
             urgent: true
         ) {
+            noteLossEvent(reason: "Keyframe request")
             markKeyframeRequestIssued()
             scheduleProcessingIfNeeded()
         }

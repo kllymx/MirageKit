@@ -110,7 +110,7 @@ flowchart LR
 
 ### Quality Presets
 
-`MirageQualityPreset` configures encoder quality per 60/120Hz target. `.lowLatency` uses aggressive frame skipping and smaller frames for responsiveness.
+`MirageQualityPreset` configures encoder quality per 60/120Hz target. For low-latency use cases, combine any preset with `MirageStreamLatencyMode.lowestLatency`.
 
 ### Backpressure
 

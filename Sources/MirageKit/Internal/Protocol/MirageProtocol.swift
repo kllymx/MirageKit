@@ -12,18 +12,18 @@ import CoreGraphics
 let MirageProtocolMagic: UInt32 = 0x4D495247 // "MIRG"
 
 /// Protocol version
-let MirageProtocolVersion: UInt8 = 3
+let MirageProtocolVersion: UInt8 = 4
 
 /// Default maximum UDP packet size (header + payload) to avoid IPv6 fragmentation.
 /// 1200 bytes keeps packets under the IPv6 minimum MTU (1280) once IP/UDP headers are added.
 public let MirageDefaultMaxPacketSize: Int = 1200
 
 /// Header size in bytes:
-/// Base fields (4+1+2+2+4+8+4+2+2+4+4 = 37) +
+/// Base fields (4+1+2+2+4+8+4+2+2+4+4+4 = 41) +
 /// contentRect (4 x Float32 = 16) +
 /// dimensionToken (UInt16 = 2) +
-/// epoch (UInt16 = 2) = 57 total
-let MirageHeaderSize: Int = 57
+/// epoch (UInt16 = 2) = 61 total
+let MirageHeaderSize: Int = 61
 
 /// Compute payload size from the configured maximum packet size.
 /// `maxPacketSize` includes the Mirage header; this returns the payload size only.
@@ -35,7 +35,7 @@ func miragePayloadSize(maxPacketSize: Int) -> Int {
     return MirageDefaultMaxPacketSize - MirageHeaderSize
 }
 
-/// Video frame packet header (73 bytes, fixed size)
+/// Video frame packet header (61 bytes, fixed size)
 struct FrameHeader {
     /// Magic number for validation (0x4D495247 = "MIRG")
     var magic: UInt32 = MirageProtocolMagic
@@ -67,6 +67,9 @@ struct FrameHeader {
     /// Payload length in bytes
     var payloadLength: UInt32
 
+    /// Total encoded frame length in bytes (data only, excludes parity)
+    var frameByteCount: UInt32
+
     /// CRC32 checksum of payload
     var checksum: UInt32
 
@@ -96,6 +99,7 @@ struct FrameHeader {
         fragmentIndex: UInt16,
         fragmentCount: UInt16,
         payloadLength: UInt32,
+        frameByteCount: UInt32,
         checksum: UInt32,
         contentRect: CGRect = .zero,
         dimensionToken: UInt16 = 0,
@@ -109,6 +113,7 @@ struct FrameHeader {
         self.fragmentIndex = fragmentIndex
         self.fragmentCount = fragmentCount
         self.payloadLength = payloadLength
+        self.frameByteCount = frameByteCount
         self.checksum = checksum
         self.contentRectX = Float32(contentRect.origin.x)
         self.contentRectY = Float32(contentRect.origin.y)
@@ -142,6 +147,7 @@ struct FrameHeader {
         withUnsafeBytes(of: fragmentIndex.littleEndian) { data.append(contentsOf: $0) }
         withUnsafeBytes(of: fragmentCount.littleEndian) { data.append(contentsOf: $0) }
         withUnsafeBytes(of: payloadLength.littleEndian) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: frameByteCount.littleEndian) { data.append(contentsOf: $0) }
         withUnsafeBytes(of: checksum.littleEndian) { data.append(contentsOf: $0) }
         withUnsafeBytes(of: contentRectX.bitPattern.littleEndian) { data.append(contentsOf: $0) }
         withUnsafeBytes(of: contentRectY.bitPattern.littleEndian) { data.append(contentsOf: $0) }
@@ -186,6 +192,7 @@ struct FrameHeader {
         write(fragmentIndex)
         write(fragmentCount)
         write(payloadLength)
+        write(frameByteCount)
         write(checksum)
         writeFloat32(contentRectX)
         writeFloat32(contentRectY)
@@ -235,6 +242,7 @@ struct FrameHeader {
         let fragmentIndex = read(UInt16.self)
         let fragmentCount = read(UInt16.self)
         let payloadLength = read(UInt32.self)
+        let frameByteCount = read(UInt32.self)
         let checksum = read(UInt32.self)
         let contentRectX = readFloat32()
         let contentRectY = readFloat32()
@@ -256,6 +264,7 @@ struct FrameHeader {
             fragmentIndex: fragmentIndex,
             fragmentCount: fragmentCount,
             payloadLength: payloadLength,
+            frameByteCount: frameByteCount,
             checksum: checksum,
             contentRect: CGRect(
                 x: CGFloat(contentRectX),
@@ -298,6 +307,9 @@ struct FrameFlags: OptionSet, Sendable {
 
     /// Frame is a repeat of the most recent capture
     static let repeatedFrame = FrameFlags(rawValue: 1 << 9)
+
+    /// FEC parity fragment (not part of the encoded frame payload)
+    static let fecParity = FrameFlags(rawValue: 1 << 10)
 }
 
 /// CRC32 calculation for packet validation

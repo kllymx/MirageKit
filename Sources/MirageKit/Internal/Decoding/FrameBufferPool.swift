@@ -46,6 +46,12 @@ final class FrameBufferPool: @unchecked Sendable {
             return data
         }
 
+        func withUnsafeBytes(_ body: (UnsafeRawBufferPointer) -> Void) {
+            data.withUnsafeBytes { buffer in
+                body(buffer)
+            }
+        }
+
         func release() {
             guard !isReleased else { return }
             isReleased = true
