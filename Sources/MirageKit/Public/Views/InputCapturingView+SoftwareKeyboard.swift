@@ -37,7 +37,19 @@ extension InputCapturingView {
         accessoryView.onModifierToggle = { [weak self] key, isSelected in
             self?.toggleSoftwareModifier(key, isSelected: isSelected)
         }
+#if os(visionOS)
+        accessoryView.translatesAutoresizingMaskIntoConstraints = false
+        accessoryView.isHidden = true
+        addSubview(accessoryView)
+        NSLayoutConstraint.activate([
+            accessoryView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            accessoryView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            accessoryView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            accessoryView.heightAnchor.constraint(equalToConstant: 44)
+        ])
+#else
         textField.inputAccessoryView = accessoryView
+#endif
 
         addSubview(textField)
         NSLayoutConstraint.activate([
@@ -59,6 +71,9 @@ extension InputCapturingView {
         } else {
             textField.resignFirstResponder()
         }
+#if os(visionOS)
+        softwareKeyboardAccessoryView?.isHidden = !(softwareKeyboardVisible && !hardwareKeyboardPresent)
+#endif
     }
 
     func clearSoftwareKeyboardState() {
@@ -276,7 +291,11 @@ final class SoftwareKeyboardAccessoryView: UIView {
         for key in keys {
             let button = UIButton(type: .system)
             button.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+            #if os(visionOS)
+            var configuration = UIButton.Configuration.bordered()
+            #else
             var configuration = UIButton.Configuration.glass()
+            #endif
             configuration.title = key.title
             configuration.cornerStyle = .capsule
             configuration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
@@ -308,7 +327,11 @@ final class SoftwareKeyboardAccessoryView: UIView {
 
     private func updateButton(_ button: UIButton, isSelected: Bool) {
         button.isSelected = isSelected
+        #if os(visionOS)
+        var configuration = isSelected ? UIButton.Configuration.borderedProminent() : UIButton.Configuration.bordered()
+        #else
         var configuration = isSelected ? UIButton.Configuration.prominentGlass() : UIButton.Configuration.glass()
+        #endif
         configuration.title = button.configuration?.title ?? button.titleLabel?.text
         configuration.cornerStyle = .capsule
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
