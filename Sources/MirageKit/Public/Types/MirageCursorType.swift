@@ -188,30 +188,20 @@ extension MirageCursorType {
             // iPadOS doesn't have a native crosshair, so we use a small dot
             return UIPointerStyle(shape: .roundedRect(CGRect(x: 0, y: 0, width: 8, height: 8), radius: 4))
 
-        case .closedHand:
-            // Grabbing cursor - small circle to indicate active grab
-            return UIPointerStyle(shape: .roundedRect(CGRect(x: 0, y: 0, width: 20, height: 20), radius: 10))
-
-        case .openHand, .pointingHand, .dragLink, .dragCopy:
-            // Ready-to-grab cursor - slightly larger circle
-            return UIPointerStyle(shape: .roundedRect(CGRect(x: 0, y: 0, width: 24, height: 24), radius: 12))
+        case .closedHand, .openHand, .pointingHand, .dragLink, .dragCopy:
+            // Drag-related cursors - rely on system pointer presentation
+            return UIPointerStyle.system()
 
         case .resizeLeft, .resizeRight, .resizeLeftRight:
             // Horizontal resize - small shape with left/right arrows
-            // Angles: left = -π/2 (or 3π/2), right = π/2 (clockwise from top)
-            let leftPosition = UIPointerAccessory.Position(offset: 0, angle: -.pi / 2)
-            let rightPosition = UIPointerAccessory.Position(offset: 0, angle: .pi / 2)
             let style = UIPointerStyle(shape: .roundedRect(CGRect(x: 0, y: 0, width: 4, height: 4), radius: 2))
-            style.accessories = [.arrow(leftPosition), .arrow(rightPosition)]
+            style.accessories = [.arrow(.left), .arrow(.right)]
             return style
 
         case .resizeUp, .resizeDown, .resizeUpDown:
             // Vertical resize - small shape with top/bottom arrows
-            // Angles: top = 0, bottom = π (clockwise from top)
-            let topPosition = UIPointerAccessory.Position(offset: 0, angle: 0)
-            let bottomPosition = UIPointerAccessory.Position(offset: 0, angle: .pi)
             let style = UIPointerStyle(shape: .roundedRect(CGRect(x: 0, y: 0, width: 4, height: 4), radius: 2))
-            style.accessories = [.arrow(topPosition), .arrow(bottomPosition)]
+            style.accessories = [.arrow(.top), .arrow(.bottom)]
             return style
 
         case .resizeNorthEast, .resizeSouthWest, .resizeNESW:

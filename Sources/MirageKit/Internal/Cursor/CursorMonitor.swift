@@ -24,6 +24,9 @@ actor CursorMonitor {
     /// Last known visibility state per stream
     private var lastVisibility: [StreamID: Bool] = [:]
 
+    /// Expand visibility checks slightly so edge cursors remain visible at window bounds
+    private let visibilityPadding: CGFloat = 1.0
+
     /// Callback invoked when cursor changes for a stream
     private var onCursorChange: ((StreamID, MirageCursorType, Bool) -> Void)?
 
@@ -81,7 +84,8 @@ actor CursorMonitor {
         for (streamID, windowFrame) in streams {
             // Check if mouse is within this window's frame
             // Note: windowFrame is in screen coordinates with bottom-left origin
-            let isInWindow = windowFrame.contains(mouseLocation)
+            let visibilityFrame = windowFrame.insetBy(dx: -visibilityPadding, dy: -visibilityPadding)
+            let isInWindow = visibilityFrame.contains(mouseLocation)
 
             // ALWAYS detect actual system cursor, regardless of mouse position
             // This ensures cursor changes are sent even when mouse is at window edge
@@ -116,7 +120,8 @@ actor CursorMonitor {
     /// Force an immediate cursor update for a specific stream
     func forceUpdate(for streamID: StreamID, windowFrame: CGRect) {
         let mouseLocation = NSEvent.mouseLocation
-        let isInWindow = windowFrame.contains(mouseLocation)
+        let visibilityFrame = windowFrame.insetBy(dx: -visibilityPadding, dy: -visibilityPadding)
+        let isInWindow = visibilityFrame.contains(mouseLocation)
 
         // ALWAYS detect actual cursor type, regardless of mouse position
         let cursorType = MirageCursorType(from: NSCursor.currentSystem) ?? .arrow
