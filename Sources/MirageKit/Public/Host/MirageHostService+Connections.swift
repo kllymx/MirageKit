@@ -58,7 +58,12 @@ extension MirageHostService {
 
         MirageLogger.host("Waiting for hello message from \(endpointDescription)...")
 
-        let deviceInfo = await receiveHelloMessage(from: connection, endpoint: endpointDescription)
+        guard let deviceInfo = await receiveHelloMessage(from: connection, endpoint: endpointDescription) else {
+            MirageLogger.host("Closing connection without valid hello from \(endpointDescription)")
+            connection.cancel()
+            return
+        }
+
         let connectionID = ObjectIdentifier(connection)
 
         guard reserveSingleClientSlot(for: connectionID) else {
@@ -129,7 +134,7 @@ extension MirageHostService {
     }
 
     /// Receive hello message from a connecting client.
-    func receiveHelloMessage(from connection: NWConnection, endpoint: String) async -> MirageDeviceInfo {
+    func receiveHelloMessage(from connection: NWConnection, endpoint: String) async -> MirageDeviceInfo? {
         let result: (
             Data?,
             NWConnection.ContentContext?,
@@ -145,22 +150,22 @@ extension MirageHostService {
 
         if let error {
             MirageLogger.error(.host, "Error receiving hello: \(error)")
-            return MirageDeviceInfo(name: "Unknown Device", deviceType: .unknown, endpoint: endpoint)
+            return nil
         }
 
         guard let data, !data.isEmpty else {
             MirageLogger.host("No data received for hello")
-            return MirageDeviceInfo(name: "Unknown Device", deviceType: .unknown, endpoint: endpoint)
+            return nil
         }
 
         guard let (message, _) = ControlMessage.deserialize(from: data) else {
             MirageLogger.host("Failed to deserialize hello message")
-            return MirageDeviceInfo(name: "Unknown Device", deviceType: .unknown, endpoint: endpoint)
+            return nil
         }
 
         guard message.type == .hello else {
             MirageLogger.host("Expected hello message, got \(message.type)")
-            return MirageDeviceInfo(name: "Unknown Device", deviceType: .unknown, endpoint: endpoint)
+            return nil
         }
 
         do {
@@ -175,7 +180,7 @@ extension MirageHostService {
             )
         } catch {
             MirageLogger.error(.host, "Failed to decode hello: \(error)")
-            return MirageDeviceInfo(name: "Unknown Device", deviceType: .unknown, endpoint: endpoint)
+            return nil
         }
     }
 
