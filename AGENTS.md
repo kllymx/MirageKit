@@ -19,6 +19,7 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - iPad modifier input uses flags snapshots with gesture resync to avoid stuck keys.
 - Custom preset: encoder overrides for pixel format, color space, bitrate, and keyframe settings.
 - `MIRAGE_SIGNPOST=1` enables Instruments signposts for decode/render timing.
+- Automatic quality tests use UDP payloads plus VideoToolbox benchmarks for encode/decode timing.
 
 ## Interaction Guidelines
 - Planning phase: detailed step list; explicit plan.
@@ -60,9 +61,9 @@ MirageKit/
 ## Public API (`Sources/MirageKit/Public/`)
 - Host services and delegates: `Host/`.
 - Host frame-rate helpers: `Host/MirageHostService+FrameRate.swift`.
-- Client services, delegates, session stores, metrics, cursor snapshots, cursor position snapshots: `Client/`.
+- Client services, delegates, session stores, metrics, cursor snapshots, cursor position snapshots: `Client/` (includes `MirageClientService+QualityTest.swift`).
 - Input event types: `Input/`.
-- Shared types and configuration (including `MirageDesktopStreamMode`): `Types/`.
+- Shared types and configuration (including `MirageDesktopStreamMode`, `MirageQualityTestPlan`, `MirageQualityTestSummary`): `Types/`.
 - Stream rendering views: `Views/` (Metal-backed stream view, input capture, and representables).
 - Software keyboard input helpers: `Views/InputCapturingView+SoftwareKeyboard.swift`.
 - Utilities: `Utilities/`.
@@ -72,11 +73,12 @@ MirageKit/
 - Capture: capture orchestration, frame metadata, Metal copy, differential encoding.
 - Encoding/Decoding: HEVC encoder and decoder, frame reassembly buffer reuse.
 - Network: discovery and connectivity (Bonjour, TLS transport).
-- Protocol: wire format and serialization.
+- Protocol: wire format and serialization (quality test messages and UDP header).
 - VirtualDisplay: CGVirtualDisplay bridge and shared display coordination.
 - Rendering: Metal renderer.
 - Cursor: cursor position tracking.
 - Logging: unified logging and signposts.
+- Utilities: codec benchmark timing storage and helpers for automatic quality tests.
 
 ## Architecture Patterns
 - `MirageHostService` and `MirageClientService` are the main entry points.

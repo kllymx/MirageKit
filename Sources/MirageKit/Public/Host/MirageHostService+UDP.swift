@@ -60,7 +60,7 @@ extension MirageHostService {
                 Bool,
                 NWError?
             ) = await withCheckedContinuation { continuation in
-                connection.receive(minimumIncompleteLength: 22, maximumLength: 64) { data, context, isComplete, error in
+                connection.receive(minimumIncompleteLength: 20, maximumLength: 64) { data, context, isComplete, error in
                     continuation.resume(returning: (data, context, isComplete, error))
                 }
             }
@@ -70,7 +70,7 @@ extension MirageHostService {
                 break
             }
 
-            guard let data = result.0, data.count >= 22 else {
+            guard let data = result.0, data.count >= 20 else {
                 if result.2 {
                     MirageLogger.host("UDP connection closed (no more data)")
                     break
@@ -80,6 +80,16 @@ extension MirageHostService {
             }
 
             let magic = data.prefix(4)
+            if magic.elementsEqual([0x4D, 0x49, 0x52, 0x51]) {
+                let uuidBytes: uuid_t = data.withUnsafeBytes { ptr in
+                    ptr.loadUnaligned(fromByteOffset: 4, as: uuid_t.self)
+                }
+                let deviceID = UUID(uuid: uuidBytes)
+                qualityTestConnectionsByClientID[deviceID] = connection
+                MirageLogger.host("Registered quality test UDP connection for device \(deviceID.uuidString)")
+                continue
+            }
+
             guard magic.elementsEqual([0x4D, 0x49, 0x52, 0x47]) else {
                 MirageLogger.host("Invalid video registration magic")
                 continue

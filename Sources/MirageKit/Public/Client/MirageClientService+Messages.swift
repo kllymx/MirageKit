@@ -81,6 +81,10 @@ extension MirageClientService {
             handleMenuBarUpdate(message)
         case .menuActionResult:
             handleMenuActionResult(message)
+        case .pong:
+            handlePong(message)
+        case .qualityTestResult:
+            handleQualityTestResult(message)
         default:
             break
         }

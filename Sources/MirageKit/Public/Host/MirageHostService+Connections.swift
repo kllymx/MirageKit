@@ -162,6 +162,7 @@ extension MirageHostService {
             udpConnection: nil
         )
         clientsByConnection[ObjectIdentifier(connection)] = clientContext
+        clientsByID[client.id] = clientContext
 
         connectedClients.append(client)
         delegate?.hostService(self, didConnectClient: client)

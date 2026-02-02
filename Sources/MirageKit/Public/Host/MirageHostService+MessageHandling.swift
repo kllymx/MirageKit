@@ -213,6 +213,8 @@ extension MirageHostService {
 
         case .stopDesktopStream:
             await handleStopDesktopStream(message)
+        case .qualityTestRequest:
+            await handleQualityTestRequest(message, from: client, connection: connection)
 
         default:
             MirageLogger.host("Unhandled message type: \(message.type)")

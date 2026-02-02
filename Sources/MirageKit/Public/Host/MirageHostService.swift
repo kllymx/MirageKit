@@ -73,6 +73,7 @@ public final class MirageHostService {
     var nextStreamID: StreamID = 1
     var streamsByID: [StreamID: StreamContext] = [:]
     var clientsByConnection: [ObjectIdentifier: ClientContext] = [:]
+    var clientsByID: [UUID: ClientContext] = [:]
     var singleClientConnectionID: ObjectIdentifier?
 
     // UDP connections by stream ID (received from client registrations)
@@ -81,6 +82,10 @@ public final class MirageHostService {
     var streamStartupBaseTimes: [StreamID: CFAbsoluteTime] = [:]
     var streamStartupRegistrationLogged: Set<StreamID> = []
     var streamStartupFirstPacketSent: Set<StreamID> = []
+
+    // Quality test connections and tasks
+    var qualityTestConnectionsByClientID: [UUID: NWConnection] = [:]
+    var qualityTestTasksByClientID: [UUID: Task<Void, Never>] = [:]
 
     // Track first error time per client for graceful disconnect on persistent errors
     // If errors persist past the timeout, disconnect the client.

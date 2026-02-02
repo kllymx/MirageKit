@@ -62,6 +62,7 @@ public final class MirageClientService {
     public var resolutionScale: CGFloat = 1.0
 
     /// Whether the host is allowed to adapt stream scale for FPS recovery.
+    public var adaptiveScaleEnabled: Bool = true
 
     /// Latency preference for stream buffering behavior.
     public var latencyMode: MirageStreamLatencyMode = .smoothest
@@ -168,6 +169,15 @@ public final class MirageClientService {
     var streamStartupBaseTimes: [StreamID: CFAbsoluteTime] = [:]
     var streamStartupFirstRegistrationSent: Set<StreamID> = []
     var streamStartupFirstPacketReceived: Set<StreamID> = []
+
+    // MARK: - Quality Test State
+
+    let qualityTestLock = NSLock()
+    nonisolated(unsafe) var qualityTestAccumulatorStorage: QualityTestAccumulator?
+    nonisolated(unsafe) var qualityTestActiveTestIDStorage: UUID?
+    var qualityTestResultContinuation: CheckedContinuation<QualityTestResultMessage?, Never>?
+    var qualityTestPendingTestID: UUID?
+    var pingContinuation: CheckedContinuation<Void, Error>?
 
     /// Thread-safe set of active stream IDs for packet filtering from UDP callback
     let activeStreamIDsLock = NSLock()

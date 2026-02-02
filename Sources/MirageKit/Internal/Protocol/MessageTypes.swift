@@ -83,6 +83,8 @@ enum ControlMessageType: UInt8, Codable {
     case stopDesktopStream = 0xA1 // Client → Host: Stop desktop stream
     case desktopStreamStarted = 0xA2 // Host → Client: Desktop stream is active
     case desktopStreamStopped = 0xA3 // Host → Client: Desktop stream ended
+    case qualityTestRequest = 0xA4 // Client → Host: Run quality test
+    case qualityTestResult = 0xA5 // Host → Client: Quality test metadata/result
 
     /// Errors
     case error = 0xFF

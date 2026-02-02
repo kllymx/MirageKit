@@ -33,7 +33,7 @@ extension MirageClientService {
         return max(0.1, min(1.0, scale))
     }
 
-    func getMainDisplayResolution() -> CGSize {
+    public func getMainDisplayResolution() -> CGSize {
         #if os(macOS)
         guard let mainScreen = NSScreen.main else { return CGSize(width: 2560, height: 1600) }
         let scale = mainScreen.backingScaleFactor

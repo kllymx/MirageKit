@@ -41,6 +41,11 @@ extension MirageHostService {
             clientsByConnection.removeValue(forKey: key)
             removedConnectionID = key
         }
+        clientsByID.removeValue(forKey: client.id)
+        qualityTestConnectionsByClientID.removeValue(forKey: client.id)
+        if let task = qualityTestTasksByClientID.removeValue(forKey: client.id) {
+            task.cancel()
+        }
 
         if let removedConnectionID, singleClientConnectionID == removedConnectionID { singleClientConnectionID = nil }
 

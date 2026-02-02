@@ -110,9 +110,15 @@ extension MirageClientService {
         @Sendable
         func receiveNext() {
             udpConnection
-                .receive(minimumIncompleteLength: mirageHeaderSize, maximumLength: 65536) { data, _, _, error in
-                    if let data, data.count >= mirageHeaderSize {
-                        if let header = FrameHeader.deserialize(from: data) {
+                .receive(minimumIncompleteLength: 4, maximumLength: 65536) { data, _, _, error in
+                    if let data {
+                        if let testHeader = QualityTestPacketHeader.deserialize(from: data) {
+                            service.handleQualityTestPacket(testHeader, data: data)
+                            receiveNext()
+                            return
+                        }
+
+                        if data.count >= mirageHeaderSize, let header = FrameHeader.deserialize(from: data) {
                             let streamID = header.streamID
 
                             guard service.activeStreamIDsForFiltering.contains(streamID) else {
