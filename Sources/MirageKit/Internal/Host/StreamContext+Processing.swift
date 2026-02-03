@@ -392,8 +392,50 @@ extension StreamContext {
     }
 
     func adjustQualityForQueue(queueBytes: Int) async {
-        _ = queueBytes
-        return
+        guard let encoder else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        if lastQualityAdjustmentTime > 0, now - lastQualityAdjustmentTime < qualityAdjustmentCooldown { return }
+
+        let averageEncodeMs = await encoder.getAverageEncodeTimeMs()
+        if averageEncodeMs <= 0 { return }
+
+        let frameBudgetMs = 1000.0 / Double(max(1, currentFrameRate))
+        let encodeOverBudget = averageEncodeMs > frameBudgetMs * 1.05
+        let queuePressured = queueBytes > queuePressureBytes
+        let highPressure = queueBytes > maxQueuedBytes
+
+        if encodeOverBudget || queuePressured {
+            qualityUnderBudgetCount = 0
+            qualityOverBudgetCount += 1
+            let step = highPressure ? qualityDropStepHighPressure : qualityDropStep
+            if qualityOverBudgetCount >= qualityDropThreshold {
+                let next = max(qualityFloor, activeQuality - step)
+                if next < activeQuality {
+                    activeQuality = next
+                    await encoder.updateQuality(activeQuality)
+                    lastQualityAdjustmentTime = now
+                    qualityOverBudgetCount = 0
+                    let qualityText = activeQuality.formatted(.number.precision(.fractionLength(2)))
+                    let avgText = averageEncodeMs.formatted(.number.precision(.fractionLength(1)))
+                    MirageLogger.metrics("Quality down to \(qualityText) (encode \(avgText)ms, queue \(queueBytes / 1024)KB)")
+                }
+            }
+        } else {
+            qualityOverBudgetCount = 0
+            qualityUnderBudgetCount += 1
+            if qualityUnderBudgetCount >= qualityRaiseThreshold {
+                let next = min(qualityCeiling, activeQuality + qualityRaiseStep)
+                if next > activeQuality {
+                    activeQuality = next
+                    await encoder.updateQuality(activeQuality)
+                    lastQualityAdjustmentTime = now
+                    qualityUnderBudgetCount = 0
+                    let qualityText = activeQuality.formatted(.number.precision(.fractionLength(2)))
+                    let avgText = averageEncodeMs.formatted(.number.precision(.fractionLength(1)))
+                    MirageLogger.metrics("Quality up to \(qualityText) (encode \(avgText)ms)")
+                }
+            }
+        }
     }
 }
 #endif

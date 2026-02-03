@@ -13,7 +13,6 @@ struct QualityTestRequestMessage: Codable {
     let testID: UUID
     let plan: MirageQualityTestPlan
     let payloadBytes: Int
-    let includeCodecBenchmark: Bool
 }
 
 struct QualityTestResultMessage: Codable {

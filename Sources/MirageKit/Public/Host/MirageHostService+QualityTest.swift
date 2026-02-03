@@ -23,7 +23,9 @@ extension MirageHostService {
             return
         }
 
-        if request.includeCodecBenchmark {
+        let lastBenchmarkID = qualityTestBenchmarkIDsByClientID[client.id]
+        if lastBenchmarkID != request.testID {
+            qualityTestBenchmarkIDsByClientID[client.id] = request.testID
             Task.detached { [weak self] in
                 await self?.sendCodecBenchmarkResult(testID: request.testID, to: connection)
             }
@@ -51,30 +53,25 @@ extension MirageHostService {
 
     private func sendCodecBenchmarkResult(testID: UUID, to connection: NWConnection) async {
         let store = MirageCodecBenchmarkStore()
-        var record = store.load()
-        if record?.version != MirageCodecBenchmarkStore.currentVersion || record?.hostEncodeMs == nil {
-            let encodeMs = try? await MirageCodecBenchmark.runEncodeBenchmark()
-            record = MirageCodecBenchmarkStore.Record(
-                version: MirageCodecBenchmarkStore.currentVersion,
-                benchmarkWidth: MirageCodecBenchmark.benchmarkWidth,
-                benchmarkHeight: MirageCodecBenchmark.benchmarkHeight,
-                benchmarkFrameRate: MirageCodecBenchmark.benchmarkFrameRate,
-                hostEncodeMs: encodeMs,
-                clientDecodeMs: nil,
-                measuredAt: Date()
-            )
-            if let record {
-                store.save(record)
-            }
-        }
+        let encodeMs = try? await MirageCodecBenchmark.runEncodeBenchmark()
+        let record = MirageCodecBenchmarkStore.Record(
+            version: MirageCodecBenchmarkStore.currentVersion,
+            benchmarkWidth: MirageCodecBenchmark.benchmarkWidth,
+            benchmarkHeight: MirageCodecBenchmark.benchmarkHeight,
+            benchmarkFrameRate: MirageCodecBenchmark.benchmarkFrameRate,
+            hostEncodeMs: encodeMs,
+            clientDecodeMs: nil,
+            measuredAt: Date()
+        )
+        store.save(record)
 
         let result = QualityTestResultMessage(
             testID: testID,
-            benchmarkWidth: record?.benchmarkWidth ?? MirageCodecBenchmark.benchmarkWidth,
-            benchmarkHeight: record?.benchmarkHeight ?? MirageCodecBenchmark.benchmarkHeight,
-            benchmarkFrameRate: record?.benchmarkFrameRate ?? MirageCodecBenchmark.benchmarkFrameRate,
-            encodeMs: record?.hostEncodeMs,
-            benchmarkVersion: record?.version ?? MirageCodecBenchmarkStore.currentVersion
+            benchmarkWidth: record.benchmarkWidth,
+            benchmarkHeight: record.benchmarkHeight,
+            benchmarkFrameRate: record.benchmarkFrameRate,
+            encodeMs: record.hostEncodeMs,
+            benchmarkVersion: record.version
         )
 
         if let message = try? ControlMessage(type: .qualityTestResult, content: result) {

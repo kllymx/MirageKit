@@ -30,9 +30,15 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private var lastFrameTime: CFAbsoluteTime = 0
     private var maxFrameGap: CFAbsoluteTime = 0
     private var lastFPSLogTime: CFAbsoluteTime = 0
+    private var presentationWindowCount: UInt64 = 0
+    private var presentationWindowStartTime: Double = 0
     private var deliveredFrameCount: UInt64 = 0
     private var deliveredCompleteCount: UInt64 = 0
     private var deliveredIdleCount: UInt64 = 0
+    private var callbackDurationTotalMs: Double = 0
+    private var callbackDurationMaxMs: Double = 0
+    private var callbackSampleCount: UInt64 = 0
+    private var lastCallbackLogTime: CFAbsoluteTime = 0
     private var stallSignaled: Bool = false
     private var lastStallTime: CFAbsoluteTime = 0
     private var lastContentRect: CGRect = .zero
@@ -225,10 +231,17 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     func stream(_: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        let diagnosticsEnabled = MirageLogger.isEnabled(.capture)
+        let callbackStartTime = diagnosticsEnabled ? CFAbsoluteTimeGetCurrent() : 0
+        defer {
+            if diagnosticsEnabled {
+                let durationMs = (CFAbsoluteTimeGetCurrent() - callbackStartTime) * 1000
+                recordCallbackDuration(durationMs)
+            }
+        }
+
         let wallTime = CFAbsoluteTimeGetCurrent() // Timing: when SCK delivered the frame
         let captureTime = wallTime
-
-        let diagnosticsEnabled = MirageLogger.isEnabled(.capture)
 
         // DIAGNOSTIC: Track frame delivery gaps to detect drag/menu freeze
         if lastFrameTime > 0 {
@@ -266,6 +279,10 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         guard CMSampleBufferIsValid(sampleBuffer),
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
+        }
+
+        if diagnosticsEnabled {
+            updatePresentationFPS(presentationTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         }
 
         if !tracksFrameStatus {
@@ -431,6 +448,44 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         )
 
         emitFrame(sampleBuffer: sampleBuffer, sourcePixelBuffer: pixelBuffer, frameInfo: frameInfo, captureTime: captureTime)
+    }
+
+    private func updatePresentationFPS(presentationTime: CMTime) {
+        guard presentationTime.isValid else { return }
+        let seconds = CMTimeGetSeconds(presentationTime)
+        guard seconds.isFinite, seconds >= 0 else { return }
+        presentationWindowCount += 1
+        if presentationWindowStartTime == 0 {
+            presentationWindowStartTime = seconds
+            return
+        }
+        let window = seconds - presentationWindowStartTime
+        guard window > 2.0 else { return }
+        let fps = Double(presentationWindowCount) / window
+        let fpsText = fps.formatted(.number.precision(.fractionLength(1)))
+        MirageLogger.capture("Capture PTS fps: \(fpsText) (window \(window.formatted(.number.precision(.fractionLength(2))))s)")
+        presentationWindowCount = 0
+        presentationWindowStartTime = seconds
+    }
+
+    private func recordCallbackDuration(_ durationMs: Double) {
+        callbackDurationTotalMs += durationMs
+        callbackDurationMaxMs = max(callbackDurationMaxMs, durationMs)
+        callbackSampleCount += 1
+        let now = CFAbsoluteTimeGetCurrent()
+        if lastCallbackLogTime == 0 {
+            lastCallbackLogTime = now
+            return
+        }
+        guard now - lastCallbackLogTime > 2.0 else { return }
+        let avgMs = callbackSampleCount > 0 ? callbackDurationTotalMs / Double(callbackSampleCount) : 0
+        let avgText = avgMs.formatted(.number.precision(.fractionLength(2)))
+        let maxText = callbackDurationMaxMs.formatted(.number.precision(.fractionLength(2)))
+        MirageLogger.capture("Capture callback: avg=\(avgText)ms max=\(maxText)ms")
+        callbackDurationTotalMs = 0
+        callbackDurationMaxMs = 0
+        callbackSampleCount = 0
+        lastCallbackLogTime = now
     }
 
     private func emitFrame(

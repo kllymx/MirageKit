@@ -77,6 +77,27 @@ extension MirageHostService {
 
     func handleStreamScaleChange(streamID: StreamID, streamScale: CGFloat) async {
         let clampedScale = max(0.1, min(1.0, streamScale))
+        if streamID == desktopStreamID, desktopUsesScaledVirtualDisplay {
+            desktopRequestedStreamScale = clampedScale
+            let baseResolution: CGSize
+            if let stored = desktopBaseDisplayResolution {
+                baseResolution = stored
+            } else if let desktopContext = desktopStreamContext {
+                let encoded = await desktopContext.getEncodedDimensions()
+                baseResolution = CGSize(width: encoded.width, height: encoded.height)
+                desktopBaseDisplayResolution = baseResolution
+            } else {
+                baseResolution = .zero
+            }
+
+            let scaledResolution = resolvedDesktopVirtualDisplayResolution(
+                baseResolution: baseResolution,
+                streamScale: clampedScale
+            )
+            await handleDisplayResolutionChange(streamID: streamID, newResolution: scaledResolution)
+            return
+        }
+
         guard let context = streamsByID[streamID] else {
             MirageLogger.debug(.host, "No stream found for stream scale change: \(streamID)")
             return

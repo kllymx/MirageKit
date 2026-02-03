@@ -23,7 +23,7 @@ extension MirageClientService {
             "Quality test starting (payload \(payloadBytes)B, p2p \(networkConfig.enablePeerToPeer), maxPacket \(networkConfig.maxPacketSize)B)"
         )
         let rttMs = try await measureRTT()
-        let benchmarkTask = Task { try await ensureDecodeBenchmark() }
+        let benchmarkTask = Task { try await runDecodeBenchmark() }
 
         if udpConnection == nil {
             try await startVideoConnection()
@@ -62,8 +62,6 @@ extension MirageClientService {
         var refineLow = 0
         var refineHigh = 0
         var refineSteps = 0
-        var includeBenchmark = true
-
         while stageID < maxStages {
             let durationMs = stageID == 0 ? warmupDurationMs : stageDurationMs
             let stage = try await runQualityTestStage(
@@ -72,10 +70,8 @@ extension MirageClientService {
                 targetBitrateBps: targetBitrate,
                 durationMs: durationMs,
                 payloadBytes: payloadBytes,
-                includeCodecBenchmark: includeBenchmark,
                 connection: connection
             )
-            includeBenchmark = false
             stageResults.append(stage)
 
             if stageID == 0 {
@@ -280,14 +276,8 @@ extension MirageClientService {
         }
     }
 
-    private func ensureDecodeBenchmark() async throws -> MirageCodecBenchmarkStore.Record {
+    private func runDecodeBenchmark() async throws -> MirageCodecBenchmarkStore.Record {
         let store = MirageCodecBenchmarkStore()
-        if let record = store.load(),
-           record.version == MirageCodecBenchmarkStore.currentVersion,
-           record.clientDecodeMs != nil {
-            return record
-        }
-
         let decodeMs = try await MirageCodecBenchmark.runDecodeBenchmark()
         let record = MirageCodecBenchmarkStore.Record(
             version: MirageCodecBenchmarkStore.currentVersion,
@@ -308,7 +298,6 @@ extension MirageClientService {
         targetBitrateBps: Int,
         durationMs: Int,
         payloadBytes: Int,
-        includeCodecBenchmark: Bool,
         connection: NWConnection
     ) async throws -> MirageQualityTestSummary.StageResult {
         let stage = MirageQualityTestPlan.Stage(
@@ -323,14 +312,13 @@ extension MirageClientService {
 
         let targetMbps = Double(targetBitrateBps) / 1_000_000.0
         MirageLogger.client(
-            "Quality test stage \(stageID) start: target \(targetMbps.formatted(.number.precision(.fractionLength(1)))) Mbps, duration \(durationMs)ms, payload \(payloadBytes)B, includeBenchmark \(includeCodecBenchmark)"
+            "Quality test stage \(stageID) start: target \(targetMbps.formatted(.number.precision(.fractionLength(1)))) Mbps, duration \(durationMs)ms, payload \(payloadBytes)B"
         )
 
         let request = QualityTestRequestMessage(
             testID: testID,
             plan: plan,
-            payloadBytes: payloadBytes,
-            includeCodecBenchmark: includeCodecBenchmark
+            payloadBytes: payloadBytes
         )
         let message = try ControlMessage(type: .qualityTestRequest, content: request)
 

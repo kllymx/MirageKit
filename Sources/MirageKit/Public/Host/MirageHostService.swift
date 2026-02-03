@@ -86,6 +86,7 @@ public final class MirageHostService {
     // Quality test connections and tasks
     var qualityTestConnectionsByClientID: [UUID: NWConnection] = [:]
     var qualityTestTasksByClientID: [UUID: Task<Void, Never>] = [:]
+    var qualityTestBenchmarkIDsByClientID: [UUID: UUID] = [:]
 
     // Track first error time per client for graceful disconnect on persistent errors
     // If errors persist past the timeout, disconnect the client.
@@ -135,6 +136,9 @@ public final class MirageHostService {
     var desktopUsesVirtualDisplay = false
     var desktopCaptureSource: MirageDesktopCaptureSource = .virtualDisplay
     var desktopStreamMode: MirageDesktopStreamMode = .mirrored
+    var desktopBaseDisplayResolution: CGSize?
+    var desktopRequestedStreamScale: CGFloat = 1.0
+    var desktopUsesScaledVirtualDisplay = false
 
     /// Physical displays that were mirrored during desktop streaming (for restoration)
     var mirroredPhysicalDisplayIDs: Set<CGDirectDisplayID> = []
@@ -279,6 +283,18 @@ public final class MirageHostService {
             y: physicalBounds.origin.y + verticalInset
         )
         return CGRect(origin: origin, size: fittedSize)
+    }
+
+    func resolvedDesktopVirtualDisplayResolution(
+        baseResolution: CGSize,
+        streamScale: CGFloat
+    )
+    -> CGSize {
+        guard baseResolution.width > 0, baseResolution.height > 0 else { return baseResolution }
+        let clampedScale = StreamContext.clampStreamScale(streamScale)
+        let width = StreamContext.alignedEvenPixel(baseResolution.width * clampedScale)
+        let height = StreamContext.alignedEvenPixel(baseResolution.height * clampedScale)
+        return CGSize(width: width, height: height)
     }
 
     /// Resolve the current virtual display bounds for secondary desktop streaming.

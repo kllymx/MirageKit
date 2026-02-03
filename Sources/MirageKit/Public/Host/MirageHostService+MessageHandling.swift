@@ -101,10 +101,23 @@ extension MirageHostService {
                     .host(
                         "Client requested display resolution change for stream \(request.streamID): \(request.displayWidth)x\(request.displayHeight)"
                     )
-                await handleDisplayResolutionChange(
-                    streamID: request.streamID,
-                    newResolution: CGSize(width: request.displayWidth, height: request.displayHeight)
-                )
+                let baseResolution = CGSize(width: request.displayWidth, height: request.displayHeight)
+                if request.streamID == desktopStreamID, desktopUsesScaledVirtualDisplay {
+                    desktopBaseDisplayResolution = baseResolution
+                    let scaledResolution = resolvedDesktopVirtualDisplayResolution(
+                        baseResolution: baseResolution,
+                        streamScale: desktopRequestedStreamScale
+                    )
+                    await handleDisplayResolutionChange(
+                        streamID: request.streamID,
+                        newResolution: scaledResolution
+                    )
+                } else {
+                    await handleDisplayResolutionChange(
+                        streamID: request.streamID,
+                        newResolution: baseResolution
+                    )
+                }
             } catch {
                 MirageLogger.error(.host, "Failed to handle displayResolutionChange: \(error)")
             }

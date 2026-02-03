@@ -104,16 +104,33 @@ extension MirageHostService {
 
         let selectedCaptureSource = captureSource ?? .virtualDisplay
         desktopCaptureSource = selectedCaptureSource
+        desktopBaseDisplayResolution = displayResolution
+        let clampedStreamScale = StreamContext.clampStreamScale(streamScale ?? 1.0)
+        desktopRequestedStreamScale = clampedStreamScale
+        desktopUsesScaledVirtualDisplay = selectedCaptureSource == .virtualDisplay
+        let virtualDisplayResolution = desktopUsesScaledVirtualDisplay
+            ? resolvedDesktopVirtualDisplayResolution(
+                baseResolution: displayResolution,
+                streamScale: clampedStreamScale
+            )
+            : displayResolution
+        let effectiveStreamScale = desktopUsesScaledVirtualDisplay ? 1.0 : clampedStreamScale
 
-        // Acquire virtual display at client's full requested resolution
-        // The 5K cap is applied at the encoding layer, not the virtual display
-        // Pass the target frame rate to enable 120Hz when appropriate
+        if desktopUsesScaledVirtualDisplay, clampedStreamScale < 1.0 {
+            MirageLogger.host(
+                "Desktop scale \(clampedStreamScale) → virtual display \(Int(virtualDisplayResolution.width))x\(Int(virtualDisplayResolution.height)); encoder scale forced to 1.0"
+            )
+        }
+
+        // Acquire virtual display at the resolved streaming resolution.
+        // The 5K cap is applied at the encoding layer, not the virtual display.
+        // Pass the target frame rate to enable 120Hz when appropriate.
         let virtualDisplayRefreshRate = SharedVirtualDisplayManager.streamRefreshRate(
             for: targetFrameRate ?? 60
         )
         let context = try await SharedVirtualDisplayManager.shared.acquireDisplayForConsumer(
             .desktopStream,
-            resolution: displayResolution,
+            resolution: virtualDisplayResolution,
             refreshRate: virtualDisplayRefreshRate,
             colorSpace: config.colorSpace
         )
@@ -177,7 +194,7 @@ extension MirageHostService {
                 "Desktop capture source: \(selectedCaptureSource.displayName) (capture display \(captureDisplay.display.displayID), virtual \(context.displayID), color=\(config.colorSpace.displayName))"
             )
 
-        let effectiveScale = streamScale ?? 1.0
+        let effectiveScale = effectiveStreamScale
 
         let streamContext = StreamContext(
             streamID: streamID,
@@ -217,7 +234,7 @@ extension MirageHostService {
         let mainDisplayBounds = refreshDesktopPrimaryPhysicalBounds()
         let inputBounds = resolvedDesktopInputBounds(
             physicalBounds: mainDisplayBounds,
-            virtualResolution: displayResolution
+            virtualResolution: captureResolution
         )
         let desktopWindow = MirageWindow(
             id: 0,
@@ -310,6 +327,9 @@ extension MirageHostService {
         desktopUsesVirtualDisplay = false
         desktopCaptureSource = .virtualDisplay
         desktopStreamMode = .mirrored
+        desktopBaseDisplayResolution = nil
+        desktopRequestedStreamScale = 1.0
+        desktopUsesScaledVirtualDisplay = false
         streamsByID.removeValue(forKey: streamID)
         streamStartupBaseTimes.removeValue(forKey: streamID)
         streamStartupRegistrationLogged.remove(streamID)

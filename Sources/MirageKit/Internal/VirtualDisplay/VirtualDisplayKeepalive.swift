@@ -10,6 +10,7 @@
 #if os(macOS)
 import AppKit
 import CoreGraphics
+import QuartzCore
 
 @MainActor
 final class VirtualDisplayKeepalive {
@@ -17,8 +18,7 @@ final class VirtualDisplayKeepalive {
     private let spaceID: CGSSpaceID
     private let refreshRate: Double
     private var window: NSWindow?
-    private var timer: Timer?
-    private var toggle = false
+    private let animationKey = "com.mirage.keepalive.pulse"
 
     private let pixelSize: CGFloat = 2.0
     private let alphaLow: CGFloat = 0.01
@@ -40,21 +40,13 @@ final class VirtualDisplayKeepalive {
         self.window = window
 
         let cadence = refreshRate >= 120.0 ? 120.0 : 60.0
-        let interval = 1.0 / max(1.0, cadence)
-        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.tick()
-            }
-        }
-        timer.tolerance = interval * 0.25
-        self.timer = timer
+        startAnimation(cadence: cadence)
 
         MirageLogger.host("Virtual display keepalive started for display \(displayID) @ \(Int(cadence))Hz")
     }
 
     func stop() {
-        timer?.invalidate()
-        timer = nil
+        stopAnimation()
         window?.orderOut(nil)
         window = nil
         MirageLogger.host("Virtual display keepalive stopped for display \(displayID)")
@@ -65,11 +57,28 @@ final class VirtualDisplayKeepalive {
         window.setFrame(windowFrame(), display: false)
     }
 
-    private func tick() {
+    private func startAnimation(cadence: Double) {
         guard let layer = window?.contentView?.layer else { return }
-        toggle.toggle()
-        let alpha = toggle ? alphaLow : alphaHigh
-        layer.backgroundColor = NSColor.black.withAlphaComponent(alpha).cgColor
+        layer.removeAnimation(forKey: animationKey)
+
+        let fromColor = NSColor.black.withAlphaComponent(alphaLow).cgColor
+        let toColor = NSColor.black.withAlphaComponent(alphaHigh).cgColor
+
+        let animation = CABasicAnimation(keyPath: "backgroundColor")
+        animation.fromValue = fromColor
+        animation.toValue = toColor
+        animation.duration = 1.0 / max(1.0, cadence)
+        animation.autoreverses = true
+        animation.repeatCount = .greatestFiniteMagnitude
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        animation.isRemovedOnCompletion = false
+
+        layer.backgroundColor = toColor
+        layer.add(animation, forKey: animationKey)
+    }
+
+    private func stopAnimation() {
+        window?.contentView?.layer?.removeAnimation(forKey: animationKey)
     }
 
     private func makeWindow() -> NSWindow {

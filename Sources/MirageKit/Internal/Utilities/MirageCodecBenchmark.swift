@@ -19,14 +19,19 @@ struct MirageCodecBenchmark {
     static let benchmarkFrameCount = 120
 
     static func runEncodeBenchmark() async throws -> Double {
+#if os(macOS)
+        try await runEncoderThroughputBenchmark()
+#else
         let encoder = BenchmarkEncoder(
             width: benchmarkWidth,
             height: benchmarkHeight,
             frameRate: benchmarkFrameRate,
-            pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+            pixelFormat: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         )
         let result = try await encoder.encodeFrames(frameCount: benchmarkFrameCount, collectSamples: false)
-        return average(result.encodeTimes)
+        let trimmed = result.encodeTimes.dropFirst(5)
+        return average(Array(trimmed))
+#endif
     }
 
     static func runDecodeBenchmark() async throws -> Double {
@@ -55,6 +60,140 @@ struct MirageCodecBenchmark {
         return total / Double(values.count)
     }
 
+#if os(macOS)
+    private static func runEncoderThroughputBenchmark() async throws -> Double {
+        let targetBitrate = benchmarkBitrateBps(pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarFullRange)
+        let config = MirageEncoderConfiguration(
+            targetFrameRate: benchmarkFrameRate,
+            keyFrameInterval: benchmarkFrameRate * 30,
+            colorSpace: .displayP3,
+            pixelFormat: .p010,
+            minBitrate: targetBitrate,
+            maxBitrate: targetBitrate
+        )
+        let encoder = HEVCEncoder(
+            configuration: config,
+            latencyMode: .lowestLatency,
+            inFlightLimit: 1
+        )
+        try await encoder.createSession(width: benchmarkWidth, height: benchmarkHeight)
+        try await encoder.preheat()
+
+        let group = DispatchGroup()
+        await encoder.startEncoding(
+            onEncodedFrame: { _, _, _ in },
+            onFrameComplete: { group.leave() }
+        )
+
+        let duration = CMTime(value: 1, timescale: CMTimeScale(benchmarkFrameRate))
+        let frameInfo = CapturedFrameInfo(
+            contentRect: CGRect(x: 0, y: 0, width: CGFloat(benchmarkWidth), height: CGFloat(benchmarkHeight)),
+            dirtyPercentage: 100,
+            isIdleFrame: false
+        )
+
+        var encodeTimes: [Double] = []
+
+        for frameIndex in 0 ..< benchmarkFrameCount {
+            guard let pixelBuffer = makeBenchmarkPixelBuffer(
+                width: benchmarkWidth,
+                height: benchmarkHeight,
+                pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+                frameIndex: frameIndex
+            ) else {
+                throw MirageError.protocolError("Encode benchmark failed: pixel buffer unavailable")
+            }
+
+            let presentationTime = CMTime(
+                value: CMTimeValue(frameIndex),
+                timescale: CMTimeScale(benchmarkFrameRate)
+            )
+            let frame = CapturedFrame(
+                pixelBuffer: pixelBuffer,
+                presentationTime: presentationTime,
+                duration: duration,
+                captureTime: CFAbsoluteTimeGetCurrent(),
+                info: frameInfo
+            )
+
+            group.enter()
+            let startTime = CFAbsoluteTimeGetCurrent()
+            let result = try await encoder.encodeFrame(frame, forceKeyframe: frameIndex == 0)
+            switch result {
+            case .accepted:
+                let waitResult = await waitForGroup(group, timeout: .seconds(2))
+                if waitResult == .timedOut {
+                    throw MirageError.protocolError("Encode benchmark timed out")
+                }
+                let deltaMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                if frameIndex >= 5 {
+                    encodeTimes.append(deltaMs)
+                }
+            case .skipped:
+                group.leave()
+            }
+        }
+
+        await encoder.stopEncoding()
+
+        guard !encodeTimes.isEmpty else {
+            throw MirageError.protocolError("Encode benchmark failed: no samples")
+        }
+
+        return average(encodeTimes)
+    }
+
+    private static func benchmarkBitrateBps(pixelFormat: OSType) -> Int {
+        let targetBpp: Double = pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange ? 0.18 : 0.14
+        let pixelsPerSecond = Double(benchmarkWidth * benchmarkHeight * benchmarkFrameRate)
+        let target = Int(pixelsPerSecond * targetBpp)
+        return max(20_000_000, target)
+    }
+
+    private static func makeBenchmarkPixelBuffer(
+        width: Int,
+        height: Int,
+        pixelFormat: OSType,
+        frameIndex: Int
+    ) -> CVPixelBuffer? {
+        let attrs: [String: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+        ]
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            pixelFormat,
+            attrs as CFDictionary,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess, let buffer = pixelBuffer else { return nil }
+
+        CVPixelBufferLockBaseAddress(buffer, [])
+        let planeCount = CVPixelBufferGetPlaneCount(buffer)
+        let fillValue = UInt8((frameIndex * 13) % 255)
+
+        if planeCount == 0 {
+            if let baseAddress = CVPixelBufferGetBaseAddress(buffer) {
+                memset(baseAddress, Int32(fillValue), CVPixelBufferGetDataSize(buffer))
+            }
+        } else {
+            for plane in 0 ..< planeCount {
+                if let baseAddress = CVPixelBufferGetBaseAddressOfPlane(buffer, plane) {
+                    let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(buffer, plane)
+                    let planeHeight = CVPixelBufferGetHeightOfPlane(buffer, plane)
+                    memset(baseAddress, Int32(fillValue), bytesPerRow * planeHeight)
+                }
+            }
+        }
+
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        return buffer
+    }
+#endif
+
     private final class BenchmarkEncoder {
         struct Result {
             var samples: [CMSampleBuffer]
@@ -75,13 +214,24 @@ struct MirageCodecBenchmark {
 
         func encodeFrames(frameCount: Int, collectSamples: Bool) async throws -> Result {
             var session: VTCompressionSession?
+            let encoderSpecification: CFDictionary = [
+                kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
+                kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true,
+            ] as CFDictionary
+            let imageBufferAttributes: CFDictionary = [
+                kCVPixelBufferPixelFormatTypeKey: pixelFormat,
+                kCVPixelBufferWidthKey: width,
+                kCVPixelBufferHeightKey: height,
+                kCVPixelBufferMetalCompatibilityKey: true,
+                kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+            ] as CFDictionary
             let status = VTCompressionSessionCreate(
                 allocator: kCFAllocatorDefault,
                 width: Int32(width),
                 height: Int32(height),
                 codecType: kCMVideoCodecType_HEVC,
-                encoderSpecification: nil,
-                imageBufferAttributes: nil,
+                encoderSpecification: encoderSpecification,
+                imageBufferAttributes: imageBufferAttributes,
                 compressedDataAllocator: nil,
                 outputCallback: BenchmarkEncoder.encodeCallback,
                 refcon: nil,
@@ -100,9 +250,25 @@ struct MirageCodecBenchmark {
                 ? kVTProfileLevel_HEVC_Main10_AutoLevel
                 : kVTProfileLevel_HEVC_Main_AutoLevel
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: profileLevel)
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: frameRate as CFTypeRef)
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFTypeRef)
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: frameRate * 2 as CFTypeRef)
+            let intervalSeconds = max(1.0, Double(frameRate * 2) / Double(frameRate))
+            VTSessionSetProperty(
+                session,
+                key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
+                value: intervalSeconds as CFTypeRef
+            )
+            let targetBpp: Double = pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange ? 0.12 : 0.10
+            let targetBitrate = max(10_000_000, Int(Double(width * height * frameRate) * targetBpp))
+            let bytesPerSecond = max(1, targetBitrate / 8)
+            let rateLimits: [NSNumber] = [NSNumber(value: bytesPerSecond), 0.5]
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: targetBitrate as CFTypeRef)
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: rateLimits as CFArray)
+            VTCompressionSessionPrepareToEncodeFrames(session)
 
             let group = DispatchGroup()
             let state = BenchmarkEncoderState(collectSamples: collectSamples, group: group)
