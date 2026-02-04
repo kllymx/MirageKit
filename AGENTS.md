@@ -70,13 +70,12 @@ MirageKit/
    └─ MirageKitTests/
 ```
 
-Docs: `Sources/MirageKitHost/Resources/If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
+Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 
 ## Public API
 - Shared types, input events, trust, and CloudKit helpers: `Sources/MirageKit/Public/`.
 - Client services, delegates, session stores, metrics, cursor snapshots, and stream views: `Sources/MirageKitClient/Public/`.
 - Host services, delegates, window/input controllers, and host utilities: `Sources/MirageKitHost/Public/`.
-- Support resources (ColorSync cleanup): `Sources/MirageKitHost/Public/Utilities/MirageSupportResources.swift`.
 
 ## Internal Implementation
 - Shared protocol, logging, and support utilities: `Sources/MirageKit/Internal/`.

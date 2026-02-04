@@ -140,7 +140,7 @@ MirageStreamContentView(
 
 For a deeper dive into modules and data flows, see `Architecture.md`.
 
-For ColorSync cleanup guidance, see [If-Your-Computer-Feels-Stuttery.md](Sources/MirageKitHost/Resources/If-Your-Computer-Feels-Stuttery.md).
+For ColorSync cleanup guidance, see [If-Your-Computer-Feels-Stuttery.md](If-Your-Computer-Feels-Stuttery.md).
 
 ## Configuration
 
