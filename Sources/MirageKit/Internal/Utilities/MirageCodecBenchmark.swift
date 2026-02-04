@@ -68,8 +68,7 @@ enum MirageCodecBenchmark {
             keyFrameInterval: benchmarkFrameRate * 30,
             colorSpace: .displayP3,
             pixelFormat: .p010,
-            minBitrate: targetBitrate,
-            maxBitrate: targetBitrate
+            bitrate: targetBitrate
         )
         let encoder = HEVCEncoder(
             configuration: config,

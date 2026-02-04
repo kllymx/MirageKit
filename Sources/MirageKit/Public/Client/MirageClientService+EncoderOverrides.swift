@@ -28,17 +28,11 @@ extension MirageClientService {
             request.captureQueueDepth = captureQueueDepth
             MirageLogger.client("Requesting capture queue depth: \(captureQueueDepth)")
         }
-        if let minBitrate = overrides.minBitrate, minBitrate > 0 {
-            request.minBitrate = minBitrate
-            let mbps = Double(minBitrate) / 1_000_000.0
+        if let bitrate = overrides.bitrate, bitrate > 0 {
+            request.bitrate = bitrate
+            let mbps = Double(bitrate) / 1_000_000.0
             MirageLogger
-                .client("Requesting minimum bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
-        }
-        if let maxBitrate = overrides.maxBitrate, maxBitrate > 0 {
-            request.maxBitrate = maxBitrate
-            let mbps = Double(maxBitrate) / 1_000_000.0
-            MirageLogger
-                .client("Requesting maximum bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
+                .client("Requesting bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
         }
     }
 
@@ -59,17 +53,11 @@ extension MirageClientService {
             request.captureQueueDepth = captureQueueDepth
             MirageLogger.client("Requesting capture queue depth: \(captureQueueDepth)")
         }
-        if let minBitrate = overrides.minBitrate, minBitrate > 0 {
-            request.minBitrate = minBitrate
-            let mbps = Double(minBitrate) / 1_000_000.0
+        if let bitrate = overrides.bitrate, bitrate > 0 {
+            request.bitrate = bitrate
+            let mbps = Double(bitrate) / 1_000_000.0
             MirageLogger
-                .client("Requesting minimum bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
-        }
-        if let maxBitrate = overrides.maxBitrate, maxBitrate > 0 {
-            request.maxBitrate = maxBitrate
-            let mbps = Double(maxBitrate) / 1_000_000.0
-            MirageLogger
-                .client("Requesting maximum bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
+                .client("Requesting bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
         }
     }
 
@@ -90,17 +78,11 @@ extension MirageClientService {
             request.captureQueueDepth = captureQueueDepth
             MirageLogger.client("Requesting capture queue depth: \(captureQueueDepth)")
         }
-        if let minBitrate = overrides.minBitrate, minBitrate > 0 {
-            request.minBitrate = minBitrate
-            let mbps = Double(minBitrate) / 1_000_000.0
+        if let bitrate = overrides.bitrate, bitrate > 0 {
+            request.bitrate = bitrate
+            let mbps = Double(bitrate) / 1_000_000.0
             MirageLogger
-                .client("Requesting minimum bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
-        }
-        if let maxBitrate = overrides.maxBitrate, maxBitrate > 0 {
-            request.maxBitrate = maxBitrate
-            let mbps = Double(maxBitrate) / 1_000_000.0
-            MirageLogger
-                .client("Requesting maximum bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
+                .client("Requesting bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
         }
     }
 }

@@ -24,10 +24,9 @@ enum MirageBitrateQualityMapper {
         Point(bpp: 0.25, quality: 1.0),
     ]
 
-    static func normalizedTargetBitrate(minBitrate: Int?, maxBitrate: Int?) -> Int? {
-        if let maxBitrate, maxBitrate > 0 { return maxBitrate }
-        if let minBitrate, minBitrate > 0 { return minBitrate }
-        return nil
+    static func normalizedTargetBitrate(bitrate: Int?) -> Int? {
+        guard let bitrate, bitrate > 0 else { return nil }
+        return bitrate
     }
 
     static func derivedQualities(

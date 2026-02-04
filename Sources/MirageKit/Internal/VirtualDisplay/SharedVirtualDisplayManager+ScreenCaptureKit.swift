@@ -18,17 +18,17 @@ extension SharedVirtualDisplayManager {
 
     /// Find the SCDisplay corresponding to the shared virtual display
     func findSCDisplay(maxAttempts: Int = 8) async throws -> SCDisplayWrapper {
-        guard sharedDisplay != nil else { throw SharedDisplayError.noActiveDisplay }
+        guard let displayID = sharedDisplay?.displayID else { throw SharedDisplayError.noActiveDisplay }
+        return try await findSCDisplay(displayID: displayID, maxAttempts: maxAttempts)
+    }
 
+    /// Find the SCDisplay for a specific displayID.
+    func findSCDisplay(displayID: CGDirectDisplayID, maxAttempts: Int = 8) async throws -> SCDisplayWrapper {
         var attempt = 0
         var delayMs = 120
-        var lastDisplayID: CGDirectDisplayID?
 
         while attempt < maxAttempts {
             attempt += 1
-
-            guard let displayID = sharedDisplay?.displayID else { throw SharedDisplayError.noActiveDisplay }
-            lastDisplayID = displayID
 
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -69,8 +69,7 @@ extension SharedVirtualDisplayManager {
             }
         }
 
-        let missingID = lastDisplayID ?? 0
-        throw SharedDisplayError.scDisplayNotFound(missingID)
+        throw SharedDisplayError.scDisplayNotFound(displayID)
     }
 
     /// Find the SCDisplay for the main display (used for login display streaming).

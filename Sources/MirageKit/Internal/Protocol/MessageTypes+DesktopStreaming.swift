@@ -17,9 +17,9 @@ import Foundation
 struct StartDesktopStreamMessage: Codable {
     /// Client's display scale factor
     let scaleFactor: CGFloat?
-    /// Client's display width in pixels
+    /// Client's display width in points (logical view bounds)
     let displayWidth: Int
-    /// Client's display height in pixels
+    /// Client's display height in points (logical view bounds)
     let displayHeight: Int
     /// Client-requested keyframe interval in frames
     var keyFrameInterval: Int?
@@ -31,10 +31,8 @@ struct StartDesktopStreamMessage: Codable {
     var captureQueueDepth: Int?
     /// Desktop stream mode (mirrored vs secondary display)
     var mode: MirageDesktopStreamMode?
-    /// Client-requested minimum target bitrate (bits per second)
-    var minBitrate: Int?
-    /// Client-requested maximum target bitrate (bits per second)
-    var maxBitrate: Int?
+    /// Client-requested target bitrate (bits per second)
+    var bitrate: Int?
     /// Client-requested stream scale (0.1-1.0)
     let streamScale: CGFloat?
     /// Client latency preference for buffering behavior
@@ -57,8 +55,7 @@ struct StartDesktopStreamMessage: Codable {
         case colorSpace
         case captureQueueDepth
         case mode
-        case minBitrate
-        case maxBitrate
+        case bitrate
         case streamScale
         case latencyMode
         case dataPort

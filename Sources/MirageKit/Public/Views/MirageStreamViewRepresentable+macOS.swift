@@ -26,13 +26,17 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
     /// Whether the system cursor should be locked/hidden.
     public var cursorLockEnabled: Bool
 
+    /// Optional cap for drawable pixel dimensions.
+    public var maxDrawableSize: CGSize?
+
     public init(
         streamID: StreamID,
         onInputEvent: ((MirageInputEvent) -> Void)? = nil,
         onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)? = nil,
         cursorStore: MirageClientCursorStore? = nil,
         cursorPositionStore: MirageClientCursorPositionStore? = nil,
-        cursorLockEnabled: Bool = false
+        cursorLockEnabled: Bool = false,
+        maxDrawableSize: CGSize? = nil
     ) {
         self.streamID = streamID
         self.onInputEvent = onInputEvent
@@ -40,6 +44,7 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
         self.cursorStore = cursorStore
         self.cursorPositionStore = cursorPositionStore
         self.cursorLockEnabled = cursorLockEnabled
+        self.maxDrawableSize = maxDrawableSize
     }
 
     public func makeCoordinator() -> MirageStreamViewCoordinator {
@@ -67,6 +72,7 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
         // Store Metal view reference in coordinator
         context.coordinator.metalView = metalView
         metalView.onDrawableMetricsChanged = context.coordinator.handleDrawableMetricsChanged
+        metalView.maxDrawableSize = maxDrawableSize
         metalView.streamID = streamID
 
         wrapper.cursorStore = cursorStore
@@ -102,6 +108,7 @@ public struct MirageStreamViewRepresentable: NSViewRepresentable {
         context.coordinator.onInputEvent = onInputEvent
 
         if let metalView = context.coordinator.metalView { metalView.streamID = streamID }
+        if let metalView = context.coordinator.metalView { metalView.maxDrawableSize = maxDrawableSize }
 
         if let wrapper = nsView as? ScrollPhysicsCapturingNSView {
             wrapper.cursorStore = cursorStore

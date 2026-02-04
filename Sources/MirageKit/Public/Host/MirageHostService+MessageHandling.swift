@@ -42,7 +42,7 @@ extension MirageHostService {
                 if let displayWidth = request.displayWidth, let displayHeight = request.displayHeight,
                    displayWidth > 0, displayHeight > 0 {
                     clientDisplayResolution = CGSize(width: displayWidth, height: displayHeight)
-                    MirageLogger.host("Client display resolution: \(displayWidth)x\(displayHeight)")
+                    MirageLogger.host("Client display size (points): \(displayWidth)x\(displayHeight)")
                 }
 
                 if clientDisplayResolution == nil,
@@ -64,8 +64,7 @@ extension MirageHostService {
                 let keyFrameInterval = request.keyFrameInterval
                 let pixelFormat = request.pixelFormat
                 let colorSpace = request.colorSpace
-                let minBitrate = request.minBitrate
-                let maxBitrate = request.maxBitrate
+                let bitrate = request.bitrate
                 let requestedScale = request.streamScale ?? 1.0
                 let latencyMode = request.latencyMode ?? .smoothest
                 MirageLogger
@@ -85,8 +84,7 @@ extension MirageHostService {
                     pixelFormat: pixelFormat,
                     colorSpace: colorSpace,
                     captureQueueDepth: request.captureQueueDepth,
-                    minBitrate: minBitrate,
-                    maxBitrate: maxBitrate
+                    bitrate: bitrate
                 )
             } catch {
                 MirageLogger.error(.host, "Failed to handle startStream: \(error)")
@@ -97,25 +95,14 @@ extension MirageHostService {
                 let request = try message.decode(DisplayResolutionChangeMessage.self)
                 MirageLogger
                     .host(
-                        "Client requested display resolution change for stream \(request.streamID): \(request.displayWidth)x\(request.displayHeight)"
+                        "Client requested display size change for stream \(request.streamID): " +
+                            "\(request.displayWidth)x\(request.displayHeight) pts"
                     )
                 let baseResolution = CGSize(width: request.displayWidth, height: request.displayHeight)
-                if request.streamID == desktopStreamID, desktopUsesScaledVirtualDisplay {
-                    desktopBaseDisplayResolution = baseResolution
-                    let scaledResolution = resolvedDesktopVirtualDisplayResolution(
-                        baseResolution: baseResolution,
-                        streamScale: desktopRequestedStreamScale
-                    )
-                    await handleDisplayResolutionChange(
-                        streamID: request.streamID,
-                        newResolution: scaledResolution
-                    )
-                } else {
-                    await handleDisplayResolutionChange(
-                        streamID: request.streamID,
-                        newResolution: baseResolution
-                    )
-                }
+                await handleDisplayResolutionChange(
+                    streamID: request.streamID,
+                    newResolution: baseResolution
+                )
             } catch {
                 MirageLogger.error(.host, "Failed to handle displayResolutionChange: \(error)")
             }

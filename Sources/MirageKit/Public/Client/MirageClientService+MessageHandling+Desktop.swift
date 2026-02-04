@@ -18,6 +18,10 @@ extension MirageClientService {
             MirageLogger
                 .client("Desktop stream started: stream=\(started.streamID), \(started.width)x\(started.height)")
             let streamID = started.streamID
+            let previousStreamID = desktopStreamID
+            let hasController = controllersByStream[streamID] != nil
+            let isInitialStart = desktopStreamRequestStartTime > 0 || previousStreamID == nil ||
+                previousStreamID != streamID || !hasController
             desktopStreamID = streamID
             desktopStreamResolution = CGSize(width: started.width, height: started.height)
             refreshRateOverridesByStream[streamID] = getScreenMaxRefreshRate()
@@ -35,7 +39,9 @@ extension MirageClientService {
             let dimensionToken = started.dimensionToken
 
             Task {
-                await self.setupControllerForStream(streamID)
+                if isInitialStart {
+                    await self.setupControllerForStream(streamID)
+                }
                 self.addActiveStreamID(streamID)
 
                 if let token = dimensionToken, let controller = self.controllersByStream[streamID] {

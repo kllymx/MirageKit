@@ -184,8 +184,7 @@ extension HEVCEncoder {
     }
 
     private func applyBitrateSettings(_ session: VTCompressionSession) {
-        guard let targetBitrate = configuration.maxBitrate ?? configuration.minBitrate,
-              targetBitrate > 0 else {
+        guard let targetBitrate = configuration.bitrate, targetBitrate > 0 else {
             return
         }
         let windowSeconds: Double = configuration.targetFrameRate >= 120 ? 0.25 : 0.5

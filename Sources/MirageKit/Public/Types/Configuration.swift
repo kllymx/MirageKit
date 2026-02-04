@@ -32,11 +32,8 @@ public struct MirageEncoderConfiguration: Sendable {
     /// Capture queue depth override for ScreenCaptureKit (nil uses adaptive defaults)
     public var captureQueueDepth: Int?
 
-    /// Minimum target bitrate in bits per second
-    public var minBitrate: Int?
-
-    /// Maximum target bitrate in bits per second
-    public var maxBitrate: Int?
+    /// Target bitrate in bits per second
+    public var bitrate: Int?
 
     /// Internal derived quality levels used by the encoder.
     var frameQuality: Float
@@ -50,8 +47,7 @@ public struct MirageEncoderConfiguration: Sendable {
         scaleFactor: CGFloat = 2.0,
         pixelFormat: MiragePixelFormat = .p010,
         captureQueueDepth: Int? = nil,
-        minBitrate: Int? = nil,
-        maxBitrate: Int? = nil
+        bitrate: Int? = nil
     ) {
         self.codec = codec
         self.targetFrameRate = targetFrameRate
@@ -60,8 +56,7 @@ public struct MirageEncoderConfiguration: Sendable {
         self.scaleFactor = scaleFactor
         self.pixelFormat = pixelFormat
         self.captureQueueDepth = captureQueueDepth
-        self.minBitrate = minBitrate
-        self.maxBitrate = maxBitrate
+        self.bitrate = bitrate
         frameQuality = 0.8
         keyframeQuality = 0.65
     }
@@ -71,8 +66,7 @@ public struct MirageEncoderConfiguration: Sendable {
         targetFrameRate: 120,
         keyFrameInterval: 3600,
         pixelFormat: .p010,
-        minBitrate: 130_000_000,
-        maxBitrate: 130_000_000
+        bitrate: 130_000_000
     )
 
     /// Default configuration for lower bandwidth
@@ -80,8 +74,7 @@ public struct MirageEncoderConfiguration: Sendable {
         targetFrameRate: 120,
         keyFrameInterval: 3600,
         pixelFormat: .nv12,
-        minBitrate: 100_000_000,
-        maxBitrate: 100_000_000
+        bitrate: 100_000_000
     )
 
     /// Create a copy with multiple encoder setting overrides
@@ -91,8 +84,7 @@ public struct MirageEncoderConfiguration: Sendable {
         pixelFormat: MiragePixelFormat? = nil,
         colorSpace: MirageColorSpace? = nil,
         captureQueueDepth: Int? = nil,
-        minBitrate: Int? = nil,
-        maxBitrate: Int? = nil
+        bitrate: Int? = nil
     )
     -> MirageEncoderConfiguration {
         var config = self
@@ -100,8 +92,7 @@ public struct MirageEncoderConfiguration: Sendable {
         if let pixelFormat { config.pixelFormat = pixelFormat }
         if let colorSpace { config.colorSpace = colorSpace }
         if let captureQueueDepth { config.captureQueueDepth = captureQueueDepth }
-        if let minBitrate { config.minBitrate = minBitrate }
-        if let maxBitrate { config.maxBitrate = maxBitrate }
+        if let bitrate { config.bitrate = bitrate }
         return config
     }
 
@@ -120,23 +111,20 @@ public struct MirageEncoderOverrides: Sendable, Codable {
     public var pixelFormat: MiragePixelFormat?
     public var colorSpace: MirageColorSpace?
     public var captureQueueDepth: Int?
-    public var minBitrate: Int?
-    public var maxBitrate: Int?
+    public var bitrate: Int?
 
     public init(
         keyFrameInterval: Int? = nil,
         pixelFormat: MiragePixelFormat? = nil,
         colorSpace: MirageColorSpace? = nil,
         captureQueueDepth: Int? = nil,
-        minBitrate: Int? = nil,
-        maxBitrate: Int? = nil
+        bitrate: Int? = nil
     ) {
         self.keyFrameInterval = keyFrameInterval
         self.pixelFormat = pixelFormat
         self.colorSpace = colorSpace
         self.captureQueueDepth = captureQueueDepth
-        self.minBitrate = minBitrate
-        self.maxBitrate = maxBitrate
+        self.bitrate = bitrate
     }
 }
 

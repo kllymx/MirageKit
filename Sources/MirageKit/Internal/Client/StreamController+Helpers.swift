@@ -117,26 +117,10 @@ extension StreamController {
         // Calculate aspect ratio
         let aspectRatio = pixelSize.width / pixelSize.height
 
-        // Apply 5K resolution cap while preserving aspect ratio
-        var cappedSize = pixelSize
-        if cappedSize.width > Self.maxResolutionWidth {
-            cappedSize.width = Self.maxResolutionWidth
-            cappedSize.height = cappedSize.width / aspectRatio
-        }
-        if cappedSize.height > Self.maxResolutionHeight {
-            cappedSize.height = Self.maxResolutionHeight
-            cappedSize.width = cappedSize.height * aspectRatio
-        }
-
-        // Round to even dimensions for HEVC codec
-        cappedSize.width = floor(cappedSize.width / 2) * 2
-        cappedSize.height = floor(cappedSize.height / 2) * 2
-        let cappedPixelSize = CGSize(width: cappedSize.width, height: cappedSize.height)
-
         // Calculate relative scale
         let drawablePointSize = CGSize(
-            width: cappedSize.width / scaleFactor,
-            height: cappedSize.height / scaleFactor
+            width: pixelSize.width / scaleFactor,
+            height: pixelSize.height / scaleFactor
         )
         let drawableArea = drawablePointSize.width * drawablePointSize.height
         let screenArea = screenBounds.width * screenBounds.height
@@ -147,7 +131,7 @@ extension StreamController {
         if isInitialLayout {
             lastSentAspectRatio = aspectRatio
             lastSentRelativeScale = relativeScale
-            lastSentPixelSize = cappedPixelSize
+            lastSentPixelSize = pixelSize
             await setResizeState(.idle)
             return
         }
@@ -155,7 +139,7 @@ extension StreamController {
         // Check if changed significantly
         let aspectChanged = abs(aspectRatio - lastSentAspectRatio) > 0.01
         let scaleChanged = abs(relativeScale - lastSentRelativeScale) > 0.01
-        let pixelChanged = cappedPixelSize != lastSentPixelSize
+        let pixelChanged = pixelSize != lastSentPixelSize
         guard aspectChanged || scaleChanged || pixelChanged else {
             await setResizeState(.idle)
             return
@@ -164,14 +148,14 @@ extension StreamController {
         // Update last sent values
         lastSentAspectRatio = aspectRatio
         lastSentRelativeScale = relativeScale
-        lastSentPixelSize = cappedPixelSize
+        lastSentPixelSize = pixelSize
 
         let event = ResizeEvent(
             aspectRatio: aspectRatio,
             relativeScale: relativeScale,
             clientScreenSize: screenBounds,
-            pixelWidth: Int(cappedSize.width),
-            pixelHeight: Int(cappedSize.height)
+            pixelWidth: Int(pixelSize.width.rounded()),
+            pixelHeight: Int(pixelSize.height.rounded())
         )
 
         Task { @MainActor [weak self] in

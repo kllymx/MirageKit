@@ -24,7 +24,7 @@ extension MirageHostService {
 
         let displayBounds = CGVirtualDisplayBridge.getDisplayBounds(
             newContext.displayID,
-            knownResolution: newContext.resolution
+            knownResolution: SharedVirtualDisplayManager.logicalResolution(for: newContext.resolution)
         )
         sharedVirtualDisplayBounds = displayBounds
         sharedVirtualDisplayGeneration = newContext.generation

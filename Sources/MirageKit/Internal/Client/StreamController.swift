@@ -67,10 +67,6 @@ actor StreamController {
     var lastSentRelativeScale: CGFloat = 0
     var lastSentPixelSize: CGSize = .zero
 
-    /// Maximum resolution (5K cap)
-    static let maxResolutionWidth: CGFloat = 5120
-    static let maxResolutionHeight: CGFloat = 2880
-
     /// Debounce delay for resize events
     static let resizeDebounceDelay: Duration = .milliseconds(200)
 

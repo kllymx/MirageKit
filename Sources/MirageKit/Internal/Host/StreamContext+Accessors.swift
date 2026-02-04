@@ -16,8 +16,7 @@ struct EncoderSettingsSnapshot: Sendable {
     let pixelFormat: MiragePixelFormat
     let colorSpace: MirageColorSpace
     let captureQueueDepth: Int?
-    let minBitrate: Int?
-    let maxBitrate: Int?
+    let bitrate: Int?
 }
 
 extension StreamContext {
@@ -81,8 +80,7 @@ extension StreamContext {
             pixelFormat: activePixelFormat,
             colorSpace: encoderConfig.colorSpace,
             captureQueueDepth: encoderConfig.captureQueueDepth,
-            minBitrate: encoderConfig.minBitrate,
-            maxBitrate: encoderConfig.maxBitrate
+            bitrate: encoderConfig.bitrate
         )
     }
 }

@@ -25,6 +25,9 @@ let package = Package(
     targets: [
         .target(
             name: "MirageKit",
+            resources: [
+                .process("Resources"),
+            ],
             swiftSettings: [
                 .define("MIRAGEKIT_HOST", .when(platforms: [.macOS])),
             ]

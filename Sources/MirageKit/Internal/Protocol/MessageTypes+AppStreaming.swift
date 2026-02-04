@@ -45,10 +45,8 @@ struct SelectAppMessage: Codable {
     var colorSpace: MirageColorSpace?
     /// Client-requested ScreenCaptureKit queue depth
     var captureQueueDepth: Int?
-    /// Client-requested minimum target bitrate (bits per second)
-    var minBitrate: Int?
-    /// Client-requested maximum target bitrate (bits per second)
-    var maxBitrate: Int?
+    /// Client-requested target bitrate (bits per second)
+    var bitrate: Int?
     /// Client-requested stream scale (0.1-1.0)
     let streamScale: CGFloat?
     /// Client latency preference for buffering behavior
@@ -68,8 +66,7 @@ struct SelectAppMessage: Codable {
         case pixelFormat
         case colorSpace
         case captureQueueDepth
-        case minBitrate
-        case maxBitrate
+        case bitrate
         case streamScale
         case latencyMode
     }

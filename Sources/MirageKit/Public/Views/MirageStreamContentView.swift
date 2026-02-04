@@ -26,6 +26,7 @@ public struct MirageStreamContentView: View {
     public let dockSnapEnabled: Bool
     public let usesVirtualTrackpad: Bool
     public let softwareKeyboardVisible: Bool
+    public let maxDrawableSize: CGSize?
 
     /// Resize holdoff task used during foreground transitions (iOS).
     @State private var resizeHoldoffTask: Task<Void, Never>?
@@ -38,6 +39,8 @@ public struct MirageStreamContentView: View {
     @State private var resizeFallbackTask: Task<Void, Never>?
     @State private var displayResolutionTask: Task<Void, Never>?
     @State private var lastSentDisplayResolution: CGSize = .zero
+    @State private var streamScaleTask: Task<Void, Never>?
+    @State private var lastSentStreamScale: CGFloat = 0
 
     @State private var scrollInputSampler = ScrollInputSampler()
     @State private var pointerInputSampler = PointerInputSampler()
@@ -66,7 +69,8 @@ public struct MirageStreamContentView: View {
         onSoftwareKeyboardVisibilityChanged: ((Bool) -> Void)? = nil,
         dockSnapEnabled: Bool = false,
         usesVirtualTrackpad: Bool = false,
-        softwareKeyboardVisible: Bool = false
+        softwareKeyboardVisible: Bool = false,
+        maxDrawableSize: CGSize? = nil
     ) {
         self.session = session
         self.sessionStore = sessionStore
@@ -79,6 +83,7 @@ public struct MirageStreamContentView: View {
         self.dockSnapEnabled = dockSnapEnabled
         self.usesVirtualTrackpad = usesVirtualTrackpad
         self.softwareKeyboardVisible = softwareKeyboardVisible
+        self.maxDrawableSize = maxDrawableSize
     }
 
     public var body: some View {
@@ -108,7 +113,8 @@ public struct MirageStreamContentView: View {
                 dockSnapEnabled: dockSnapEnabled,
                 usesVirtualTrackpad: usesVirtualTrackpad,
                 softwareKeyboardVisible: softwareKeyboardVisible,
-                cursorLockEnabled: isDesktopStream && desktopStreamMode == .secondary
+                cursorLockEnabled: isDesktopStream && desktopStreamMode == .secondary,
+                maxDrawableSize: maxDrawableSize
             )
             .ignoresSafeArea()
             .blur(radius: isResizing ? 20 : 0)
@@ -124,7 +130,8 @@ public struct MirageStreamContentView: View {
                 },
                 cursorStore: clientService.cursorStore,
                 cursorPositionStore: clientService.cursorPositionStore,
-                cursorLockEnabled: isDesktopStream && desktopStreamMode == .secondary
+                cursorLockEnabled: isDesktopStream && desktopStreamMode == .secondary,
+                maxDrawableSize: maxDrawableSize
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .blur(radius: isResizing ? 20 : 0)
@@ -162,6 +169,8 @@ public struct MirageStreamContentView: View {
             resizeFallbackTask = nil
             displayResolutionTask?.cancel()
             displayResolutionTask = nil
+            streamScaleTask?.cancel()
+            streamScaleTask = nil
         }
         #if os(macOS)
         .background(
@@ -238,34 +247,19 @@ public struct MirageStreamContentView: View {
 
     private func handleDrawableMetricsChanged(_ metrics: MirageDrawableMetrics) {
         guard metrics.pixelSize.width > 0, metrics.pixelSize.height > 0 else { return }
-        guard allowsResizeEvents else { return }
-
-        if session.hasReceivedFirstFrame {
-            isResizing = true
-            resizeFallbackTask?.cancel()
-            resizeFallbackTask = Task { @MainActor in
-                do {
-                    try await Task.sleep(for: .seconds(2))
-                } catch {
-                    return
-                }
-                if isResizing { isResizing = false }
-            }
-        }
 
         let viewSize = metrics.viewSize
         let scaleFactor = metrics.scaleFactor
-        let rawPixelSize = CGSize(
-            width: viewSize.width * scaleFactor,
-            height: viewSize.height * scaleFactor
-        )
-        let resolvedRawPixelSize = (rawPixelSize.width > 0 && rawPixelSize.height > 0) ? rawPixelSize : metrics
-            .pixelSize
+        let resolvedRawPixelSize = metrics.pixelSize
 
         #if os(iOS) || os(visionOS)
-        let previousDisplaySize = MirageClientService.lastKnownDrawableSize
-        if resolvedRawPixelSize != metrics.pixelSize || previousDisplaySize == .zero { MirageClientService.lastKnownDrawableSize = resolvedRawPixelSize }
-        let fallbackScreenSize = CGSize(width: 1920, height: 1080)
+        if viewSize.width > 0, viewSize.height > 0 {
+            MirageClientService.lastKnownViewSize = viewSize
+        }
+        if resolvedRawPixelSize.width > 0, resolvedRawPixelSize.height > 0 {
+            MirageClientService.lastKnownDrawablePixelSize = resolvedRawPixelSize
+        }
+        let fallbackScreenSize = viewSize
         #else
         let screenBounds = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let fallbackScreenSize = screenBounds.size
@@ -274,48 +268,89 @@ public struct MirageStreamContentView: View {
         let effectiveScreenSize = (viewSize == .zero) ? fallbackScreenSize : viewSize
 
         Task { @MainActor [clientService] in
-            guard let controller = clientService.controller(for: session.streamID) else { return }
-            await controller.handleDrawableSizeChanged(
-                metrics.pixelSize,
-                screenBounds: effectiveScreenSize,
-                scaleFactor: scaleFactor
-            )
+            guard allowsResizeEvents else { return }
+
+            if session.hasReceivedFirstFrame {
+                isResizing = true
+                resizeFallbackTask?.cancel()
+                resizeFallbackTask = Task { @MainActor in
+                    do {
+                        try await Task.sleep(for: .seconds(2))
+                    } catch {
+                        return
+                    }
+                    if isResizing { isResizing = false }
+                }
+            }
+
+            if !isDesktopStream {
+                guard let controller = clientService.controller(for: session.streamID) else { return }
+                await controller.handleDrawableSizeChanged(
+                    resolvedRawPixelSize,
+                    screenBounds: effectiveScreenSize,
+                    scaleFactor: scaleFactor
+                )
+            }
+
+            scheduleStreamScaleUpdate(for: viewSize)
+
+            guard isDesktopStream else { return }
+
+            let preferredDisplaySize = viewSize
+
+            displayResolutionTask?.cancel()
+            displayResolutionTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: .milliseconds(200))
+                } catch {
+                    return
+                }
+
+                guard lastSentDisplayResolution != preferredDisplaySize else { return }
+                lastSentDisplayResolution = preferredDisplaySize
+                try? await clientService.sendDisplayResolutionChange(
+                    streamID: session.streamID,
+                    newResolution: preferredDisplaySize
+                )
+            }
+        }
+    }
+
+    private func scheduleStreamScaleUpdate(for viewSize: CGSize) {
+        guard let maxDrawableSize,
+              maxDrawableSize.width > 0,
+              maxDrawableSize.height > 0,
+              viewSize.width > 0,
+              viewSize.height > 0 else {
+            return
         }
 
-        guard isDesktopStream else { return }
+        let virtualDisplayScaleFactor: CGFloat = 2.0
+        let virtualPixelSize = CGSize(
+            width: viewSize.width * virtualDisplayScaleFactor,
+            height: viewSize.height * virtualDisplayScaleFactor
+        )
+        let widthScale = maxDrawableSize.width / virtualPixelSize.width
+        let heightScale = maxDrawableSize.height / virtualPixelSize.height
+        let clampedScale = max(0.1, min(1.0, widthScale, heightScale))
+        let quantizedScale = clientService.quantizedStreamScale(clampedScale)
 
-        #if os(iOS) || os(visionOS)
-        let preferredDisplaySize: CGSize = if previousDisplaySize.width > 0,
-                                              previousDisplaySize.height > 0,
-                                              resolvedRawPixelSize == metrics.pixelSize,
-                                              previousDisplaySize.width >= metrics.pixelSize.width,
-                                              previousDisplaySize.height >= metrics.pixelSize.height {
-            previousDisplaySize
-        } else {
-            resolvedRawPixelSize
-        }
-        #else
-        let preferredDisplaySize = resolvedRawPixelSize
-        #endif
+        guard abs(quantizedScale - lastSentStreamScale) > 0.001 else { return }
 
-        displayResolutionTask?.cancel()
-        displayResolutionTask = Task { @MainActor in
+        streamScaleTask?.cancel()
+        let targetScale = quantizedScale
+        streamScaleTask = Task { @MainActor in
             do {
                 try await Task.sleep(for: .milliseconds(200))
             } catch {
                 return
             }
 
-            if lastSentDisplayResolution == .zero {
-                lastSentDisplayResolution = preferredDisplaySize
-                return
-            }
-
-            guard lastSentDisplayResolution != preferredDisplaySize else { return }
-            lastSentDisplayResolution = preferredDisplaySize
-            try? await clientService.sendDisplayResolutionChange(
+            guard abs(targetScale - lastSentStreamScale) > 0.001 else { return }
+            lastSentStreamScale = targetScale
+            try? await clientService.sendStreamScaleChange(
                 streamID: session.streamID,
-                newResolution: preferredDisplaySize
+                scale: targetScale
             )
         }
     }

@@ -55,7 +55,7 @@ MirageKit/
    └─ MirageKitTests/
 ```
 
-Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
+Docs: `Sources/MirageKit/Resources/If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 
 ## Public API (`Sources/MirageKit/Public/`)
 - Host services and delegates: `Host/`.
@@ -65,7 +65,7 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 - Shared types and configuration (including `MirageDesktopStreamMode`, `MirageQualityTestPlan`, `MirageQualityTestSummary`): `Types/`.
 - Stream rendering views: `Views/` (Metal-backed stream view, input capture, and representables).
 - Software keyboard input helpers: `Views/InputCapturingView+SoftwareKeyboard.swift`.
-- Utilities: `Utilities/`.
+- Utilities: `Utilities/` (includes `MirageSupportResources` for bundled support docs).
 
 ## Internal Implementation (`Sources/MirageKit/Internal/`)
 - Host: app enumeration, session state, menu bar capture, unlock handling, stream lifecycle, power assertions, packet buffer reuse for UDP sends.
@@ -115,7 +115,7 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 
 ## Virtual Display Behavior
 - App streaming: `acquireDisplay(for:clientResolution:)` creates a display sized to client resolution; window is moved onto it for isolation.
-- Desktop streaming: `acquireDisplayForConsumer(.desktopStream)` creates display at client-requested resolution (capped at 5K); main display is mirrored onto it.
+- Desktop streaming: `acquireDisplayForConsumer(.desktopStream)` creates display at client-requested resolution; capture/encoder enforce the cap; main display is mirrored onto it.
 - Display capture for login/desktop streams uses the virtual display pixel resolution override to avoid HiDPI half-resolution captures.
 
 ## Platform Support

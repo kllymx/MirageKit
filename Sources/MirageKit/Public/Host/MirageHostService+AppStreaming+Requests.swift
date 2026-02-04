@@ -59,8 +59,7 @@ extension MirageHostService {
             let keyFrameInterval = request.keyFrameInterval
             let pixelFormat = request.pixelFormat
             let colorSpace = request.colorSpace
-            let minBitrate = request.minBitrate
-            let maxBitrate = request.maxBitrate
+            let bitrate = request.bitrate
             let streamScale = request.streamScale ?? 1.0
             let latencyMode = request.latencyMode ?? .smoothest
 
@@ -138,8 +137,7 @@ extension MirageHostService {
                         pixelFormat: pixelFormat,
                         colorSpace: colorSpace,
                         captureQueueDepth: request.captureQueueDepth,
-                        minBitrate: minBitrate,
-                        maxBitrate: maxBitrate
+                        bitrate: bitrate
                     )
 
                     // Check window resizability

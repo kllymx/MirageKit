@@ -39,8 +39,8 @@ extension StreamContext {
         let frameRateFactor = currentFrameRate >= 120 ? 0.30 : 0.20
         let pixelBased = Int((pixelCount * frameRateFactor).rounded())
         let bitrateBased: Int
-        if let maxBitrate = encoderConfig.maxBitrate, maxBitrate > 0 {
-            let bytesPerSecond = Double(maxBitrate) / 8.0
+        if let bitrate = encoderConfig.bitrate, bitrate > 0 {
+            let bytesPerSecond = Double(bitrate) / 8.0
             let windowSeconds = currentFrameRate >= 120 ? 0.20 : 0.25
             bitrateBased = Int((bytesPerSecond * windowSeconds).rounded())
         } else {

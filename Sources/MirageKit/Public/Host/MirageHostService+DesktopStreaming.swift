@@ -25,8 +25,7 @@ extension MirageHostService {
         pixelFormat: MiragePixelFormat?,
         colorSpace: MirageColorSpace?,
         captureQueueDepth: Int?,
-        minBitrate: Int?,
-        maxBitrate: Int?,
+        bitrate: Int?,
         streamScale: CGFloat?,
         latencyMode: MirageStreamLatencyMode = .smoothest,
         dataPort _: UInt16?,
@@ -52,9 +51,16 @@ extension MirageHostService {
             MirageLogger.host("Desktop start: \(step) (+\(deltaMs)ms)")
         }
 
+        let virtualDisplayResolution = virtualDisplayPixelResolution(
+            for: displayResolution,
+            client: clientContext.client
+        )
         MirageLogger
             .host(
-                "Starting desktop stream at \(Int(displayResolution.width))x\(Int(displayResolution.height)) (\(mode.displayName))"
+                "Starting desktop stream at " +
+                    "\(Int(displayResolution.width))x\(Int(displayResolution.height)) pts " +
+                    "(\(Int(virtualDisplayResolution.width))x\(Int(virtualDisplayResolution.height)) px) " +
+                    "(\(mode.displayName))"
             )
         logDesktopStartStep("request accepted")
 
@@ -73,16 +79,13 @@ extension MirageHostService {
             pixelFormat: pixelFormat,
             colorSpace: colorSpace,
             captureQueueDepth: captureQueueDepth,
-            minBitrate: minBitrate,
-            maxBitrate: maxBitrate
+            bitrate: bitrate
         )
 
         if let normalized = MirageBitrateQualityMapper.normalizedTargetBitrate(
-            minBitrate: config.minBitrate,
-            maxBitrate: config.maxBitrate
+            bitrate: config.bitrate
         ) {
-            config.minBitrate = normalized
-            config.maxBitrate = normalized
+            config.bitrate = normalized
         }
 
         if let targetFrameRate { config = config.withTargetFrameRate(targetFrameRate) }
@@ -92,19 +95,12 @@ extension MirageHostService {
         //     MirageLogger.host("Desktop stream HDR enabled (Rec. 2020 + PQ)")
         // }
 
-        desktopBaseDisplayResolution = displayResolution
         let clampedStreamScale = StreamContext.clampStreamScale(streamScale ?? 1.0)
-        desktopRequestedStreamScale = clampedStreamScale
-        desktopUsesScaledVirtualDisplay = true
-        let virtualDisplayResolution = resolvedDesktopVirtualDisplayResolution(
-            baseResolution: displayResolution,
-            streamScale: clampedStreamScale
-        )
-        let effectiveStreamScale: CGFloat = 1.0
 
         if clampedStreamScale < 1.0 {
             MirageLogger.host(
-                "Desktop scale \(clampedStreamScale) → virtual display \(Int(virtualDisplayResolution.width))x\(Int(virtualDisplayResolution.height)); encoder scale forced to 1.0"
+                "Desktop scale \(clampedStreamScale) → capture/encoder downscale; virtual display stays at " +
+                    "\(Int(virtualDisplayResolution.width))x\(Int(virtualDisplayResolution.height)) px"
             )
         }
 
@@ -174,13 +170,11 @@ extension MirageHostService {
                 "Desktop capture source: Virtual Display (capture display \(captureDisplay.display.displayID), virtual \(context.displayID), color=\(config.colorSpace.displayName))"
             )
 
-        let effectiveScale = effectiveStreamScale
-
         let streamContext = StreamContext(
             streamID: streamID,
             windowID: 0,
             encoderConfig: config,
-            streamScale: effectiveScale,
+            streamScale: clampedStreamScale,
             maxPacketSize: networkConfig.maxPacketSize,
             additionalFrameFlags: [.desktopStream],
             latencyMode: latencyMode
@@ -305,9 +299,6 @@ extension MirageHostService {
         desktopPrimaryPhysicalBounds = nil
         desktopUsesVirtualDisplay = false
         desktopStreamMode = .mirrored
-        desktopBaseDisplayResolution = nil
-        desktopRequestedStreamScale = 1.0
-        desktopUsesScaledVirtualDisplay = false
         streamsByID.removeValue(forKey: streamID)
         streamStartupBaseTimes.removeValue(forKey: streamID)
         streamStartupRegistrationLogged.remove(streamID)

@@ -36,6 +36,13 @@ public class InputCapturingView: UIView {
         }
     }
 
+    /// Optional cap for drawable pixel dimensions.
+    public var maxDrawableSize: CGSize? {
+        didSet {
+            metalView.maxDrawableSize = maxDrawableSize
+        }
+    }
+
     /// Callback when the view decides on a refresh rate override.
     public var onRefreshRateOverrideChange: ((Int) -> Void)? {
         didSet {

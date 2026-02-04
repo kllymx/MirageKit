@@ -15,7 +15,7 @@ public extension MirageClientService {
     /// Start streaming the desktop (mirrored or secondary display mode).
     /// - Parameters:
     ///   - scaleFactor: Optional display scale factor.
-    ///   - displayResolution: Client's display resolution for virtual display sizing.
+    ///   - displayResolution: Client's logical display size in points for virtual display sizing.
     ///   - mode: Desktop stream mode (mirrored vs secondary display).
     ///   - keyFrameInterval: Optional keyframe interval in frames.
     ///   - encoderOverrides: Optional per-stream encoder overrides.
@@ -32,10 +32,14 @@ public extension MirageClientService {
     async throws {
         guard case .connected = connectionState, let connection else { throw MirageError.protocolError("Not connected") }
 
-        // Use provided display resolution or detect from main display.
-        let effectiveDisplayResolution = scaledDisplayResolution(displayResolution ?? getMainDisplayResolution())
-
-        guard effectiveDisplayResolution.width > 0, effectiveDisplayResolution.height > 0 else { throw MirageError.protocolError("Invalid display resolution") }
+        let baseResolution = displayResolution ?? getMainDisplayResolution()
+        guard baseResolution.width > 0, baseResolution.height > 0 else {
+            throw MirageError.protocolError("Display size unavailable")
+        }
+        let effectiveDisplayResolution = scaledDisplayResolution(baseResolution)
+        guard effectiveDisplayResolution.width > 0, effectiveDisplayResolution.height > 0 else {
+            throw MirageError.protocolError("Invalid display resolution")
+        }
 
         desktopStreamMode = mode
 
@@ -47,8 +51,7 @@ public extension MirageClientService {
             pixelFormat: nil,
             colorSpace: nil,
             mode: mode,
-            minBitrate: nil,
-            maxBitrate: nil,
+            bitrate: nil,
             streamScale: clampedStreamScale(),
             latencyMode: latencyMode,
             dataPort: nil,
@@ -68,7 +71,7 @@ public extension MirageClientService {
 
         MirageLogger
             .client(
-                "Requested desktop stream: \(Int(effectiveDisplayResolution.width))x\(Int(effectiveDisplayResolution.height))"
+                "Requested desktop stream: \(Int(effectiveDisplayResolution.width))x\(Int(effectiveDisplayResolution.height)) pts"
             )
     }
 

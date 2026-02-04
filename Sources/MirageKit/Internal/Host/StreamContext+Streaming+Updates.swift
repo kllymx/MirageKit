@@ -142,18 +142,7 @@ extension StreamContext {
 
     func updateStreamScale(_ newScale: CGFloat) async throws {
         let clampedScale = StreamContext.clampStreamScale(newScale)
-        requestedStreamScale = clampedScale
         let previousScale = streamScale
-
-        isResizing = true
-        defer { isResizing = false }
-
-        currentContentRect = .zero
-
-        dimensionToken &+= 1
-        MirageLogger.stream("Dimension token incremented to \(dimensionToken)")
-        await packetSender?.bumpGeneration(reason: "stream scale update")
-        resetPipelineStateForReconfiguration(reason: "stream scale update")
 
         let derivedBaseSize: CGSize
         if baseCaptureSize != .zero { derivedBaseSize = baseCaptureSize } else if previousScale > 0 {
@@ -165,16 +154,42 @@ extension StreamContext {
         } else {
             derivedBaseSize = currentCaptureSize
         }
-        baseCaptureSize = derivedBaseSize
-        guard derivedBaseSize.width > 0, derivedBaseSize.height > 0 else { return }
+        guard derivedBaseSize.width > 0, derivedBaseSize.height > 0 else {
+            requestedStreamScale = clampedScale
+            return
+        }
 
         let resolvedScale = resolvedStreamScale(
+            for: derivedBaseSize,
+            requestedScale: clampedScale,
+            logLabel: nil
+        )
+        if resolvedScale == streamScale {
+            requestedStreamScale = clampedScale
+            return
+        }
+
+        requestedStreamScale = clampedScale
+
+        isResizing = true
+        defer { isResizing = false }
+
+        currentContentRect = .zero
+
+        dimensionToken &+= 1
+        MirageLogger.stream("Dimension token incremented to \(dimensionToken)")
+        await packetSender?.bumpGeneration(reason: "stream scale update")
+        resetPipelineStateForReconfiguration(reason: "stream scale update")
+
+        baseCaptureSize = derivedBaseSize
+
+        let resolvedScaleWithLog = resolvedStreamScale(
             for: derivedBaseSize,
             requestedScale: requestedStreamScale,
             logLabel: "Resolution cap"
         )
-        guard resolvedScale != streamScale else { return }
-        streamScale = resolvedScale
+        guard resolvedScaleWithLog != streamScale else { return }
+        streamScale = resolvedScaleWithLog
 
         let outputSize = scaledOutputSize(for: derivedBaseSize)
         let scaledWidth = Int(outputSize.width)

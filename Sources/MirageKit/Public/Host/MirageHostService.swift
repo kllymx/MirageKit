@@ -135,9 +135,6 @@ public final class MirageHostService {
     var desktopVirtualDisplayID: CGDirectDisplayID?
     var desktopUsesVirtualDisplay = false
     var desktopStreamMode: MirageDesktopStreamMode = .mirrored
-    var desktopBaseDisplayResolution: CGSize?
-    var desktopRequestedStreamScale: CGFloat = 1.0
-    var desktopUsesScaledVirtualDisplay = false
 
     /// Physical displays that were mirrored during desktop streaming (for restoration)
     var mirroredPhysicalDisplayIDs: Set<CGDirectDisplayID> = []
@@ -284,18 +281,6 @@ public final class MirageHostService {
         return CGRect(origin: origin, size: fittedSize)
     }
 
-    func resolvedDesktopVirtualDisplayResolution(
-        baseResolution: CGSize,
-        streamScale: CGFloat
-    )
-    -> CGSize {
-        guard baseResolution.width > 0, baseResolution.height > 0 else { return baseResolution }
-        let clampedScale = StreamContext.clampStreamScale(streamScale)
-        let width = StreamContext.alignedEvenPixel(baseResolution.width * clampedScale)
-        let height = StreamContext.alignedEvenPixel(baseResolution.height * clampedScale)
-        return CGSize(width: width, height: height)
-    }
-
     /// Resolve the current virtual display bounds for secondary desktop streaming.
     /// Uses CoreGraphics coordinates for input injection.
     func resolveDesktopDisplayBounds() -> CGRect? {
@@ -365,8 +350,7 @@ public final class MirageHostService {
     ///   - keyFrameInterval: Optional client-requested keyframe interval (in frames)
     ///   - colorSpace: Optional color space override for capture and encode
     ///   - captureQueueDepth: Optional ScreenCaptureKit queue depth override
-    ///   - minBitrate: Optional minimum target bitrate (bits per second)
-    ///   - maxBitrate: Optional maximum target bitrate (bits per second)
+    ///   - bitrate: Optional target bitrate (bits per second)
     ///   - targetFrameRate: Optional frame rate override (60/120 based on client capability)
     ///   - pixelFormat: Optional pixel format override for capture and encode
     // TODO: HDR support - requires proper virtual display EDR configuration

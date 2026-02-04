@@ -19,8 +19,8 @@ public extension MirageClientService {
     ///     If provided, the host will encode at this resolution from the start.
     ///   - scaleFactor: Optional display scale factor (e.g., 2.0 for Retina).
     ///     Used with expectedPixelSize to calculate point-based window size.
-    ///   - displayResolution: Client's physical display resolution in pixels.
-    ///     If provided, host creates a virtual display at this resolution for optimal quality.
+    ///   - displayResolution: Client's logical display size in points.
+    ///     Host applies HiDPI (2x) to determine virtual display pixel resolution.
     ///   - keyFrameInterval: Optional keyframe interval in frames. Higher = fewer lag spikes.
     ///     Examples: 600 (10 seconds @ 60fps), 300 (5 seconds @ 60fps).
     ///   - encoderOverrides: Optional per-stream encoder overrides.
@@ -48,10 +48,10 @@ public extension MirageClientService {
         if effectiveDisplayResolution.width > 0, effectiveDisplayResolution.height > 0 {
             request.displayWidth = Int(effectiveDisplayResolution.width)
             request.displayHeight = Int(effectiveDisplayResolution.height)
-            MirageLogger
-                .client(
-                    "Including display resolution: \(Int(effectiveDisplayResolution.width))x\(Int(effectiveDisplayResolution.height))"
-                )
+                MirageLogger
+                    .client(
+                        "Including display size: \(Int(effectiveDisplayResolution.width))x\(Int(effectiveDisplayResolution.height)) pts"
+                    )
         }
 
         // Include encoder config overrides if specified.

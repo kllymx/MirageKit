@@ -27,19 +27,14 @@ extension MirageHostService {
             }
 
             if cacheEntry.window.id == 0 {
-                let streamID = inputMessage.streamID
                 switch inputMessage.event {
-                case let .relativeResize(resizeEvent):
-                    let newResolution = CGSize(width: resizeEvent.pixelWidth, height: resizeEvent.pixelHeight)
-                    Task { @MainActor in
-                        await self.handleDisplayResolutionChange(streamID: streamID, newResolution: newResolution)
-                    }
+                case .relativeResize:
+                    // Desktop display sizing is driven by explicit display-resolution messages
+                    // based on client view bounds, not drawable pixel caps.
                     return
-                case let .pixelResize(resizeEvent):
-                    let newResolution = CGSize(width: resizeEvent.pixelWidth, height: resizeEvent.pixelHeight)
-                    Task { @MainActor in
-                        await self.handleDisplayResolutionChange(streamID: streamID, newResolution: newResolution)
-                    }
+                case .pixelResize:
+                    // Desktop display sizing is driven by explicit display-resolution messages
+                    // based on client view bounds, not drawable pixel caps.
                     return
                 default:
                     break

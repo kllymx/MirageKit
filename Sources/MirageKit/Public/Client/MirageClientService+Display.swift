@@ -22,6 +22,7 @@ import UIKit
 extension MirageClientService {
     /// Get the display resolution for the client stream.
     func scaledDisplayResolution(_ resolution: CGSize) -> CGSize {
+        guard resolution.width > 0, resolution.height > 0 else { return .zero }
         let width = max(2, floor(resolution.width / 2) * 2)
         let height = max(2, floor(resolution.height / 2) * 2)
         return CGSize(width: width, height: height)
@@ -30,7 +31,13 @@ extension MirageClientService {
     func clampedStreamScale() -> CGFloat {
         let scale = resolutionScale
         guard scale > 0 else { return 1.0 }
-        return max(0.1, min(1.0, scale))
+        return quantizedStreamScale(scale)
+    }
+
+    func quantizedStreamScale(_ scale: CGFloat) -> CGFloat {
+        let clamped = max(0.1, min(1.0, scale))
+        let rounded = (clamped * 100).rounded() / 100
+        return max(0.1, min(1.0, rounded))
     }
 
     public func getMainDisplayResolution() -> CGSize {
@@ -42,21 +49,29 @@ extension MirageClientService {
             height: mainScreen.frame.height * scale
         )
         #elseif os(iOS)
-        if Self.lastKnownDrawableSize.width > 0, Self.lastKnownDrawableSize.height > 0 { return Self.lastKnownDrawableSize }
-        let screen = UIScreen.main
-        let nativeBounds = screen.nativeBounds
-        if nativeBounds.width > 0, nativeBounds.height > 0 { return nativeBounds.size }
-        let scale = screen.nativeScale
-        return CGSize(
-            width: screen.bounds.width * scale,
-            height: screen.bounds.height * scale
-        )
+        if Self.lastKnownViewSize.width > 0, Self.lastKnownViewSize.height > 0 { return Self.lastKnownViewSize }
+        return .zero
         #elseif os(visionOS)
         // Use cached drawable size if available, otherwise default resolution
-        if Self.lastKnownDrawableSize.width > 0, Self.lastKnownDrawableSize.height > 0 { return Self.lastKnownDrawableSize }
-        return CGSize(width: 2560, height: 1600)
+        if Self.lastKnownViewSize.width > 0, Self.lastKnownViewSize.height > 0 { return Self.lastKnownViewSize }
+        return .zero
         #else
         return CGSize(width: 2560, height: 1600)
+        #endif
+    }
+
+    public func getVirtualDisplayPixelResolution() -> CGSize {
+        #if os(iOS) || os(visionOS)
+        let viewSize = getMainDisplayResolution()
+        guard viewSize.width > 0, viewSize.height > 0 else { return .zero }
+        let scaleFactor: CGFloat = 2.0
+        let pixelSize = CGSize(
+            width: viewSize.width * scaleFactor,
+            height: viewSize.height * scaleFactor
+        )
+        return scaledDisplayResolution(pixelSize)
+        #else
+        return getMainDisplayResolution()
         #endif
     }
 
@@ -88,7 +103,7 @@ extension MirageClientService {
         maxRefreshRateOverride = clamped
     }
 
-    /// Send display resolution change to host (when window moves to different display).
+    /// Send display size change (points) to host when the client view bounds change.
     public func sendDisplayResolutionChange(streamID: StreamID, newResolution: CGSize) async throws {
         guard case .connected = connectionState, let connection else { throw MirageError.protocolError("Not connected") }
 
@@ -102,7 +117,8 @@ extension MirageClientService {
 
         MirageLogger
             .client(
-                "Sending display resolution change for stream \(streamID): \(Int(scaledResolution.width))x\(Int(scaledResolution.height))"
+                "Sending display size change for stream \(streamID): " +
+                    "\(Int(scaledResolution.width))x\(Int(scaledResolution.height)) pts"
             )
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -121,7 +137,7 @@ extension MirageClientService {
     async throws {
         guard case .connected = connectionState, let connection else { throw MirageError.protocolError("Not connected") }
 
-        let clampedScale = max(0.1, min(1.0, scale))
+        let clampedScale = quantizedStreamScale(scale)
         let request = StreamScaleChangeMessage(
             streamID: streamID,
             streamScale: clampedScale

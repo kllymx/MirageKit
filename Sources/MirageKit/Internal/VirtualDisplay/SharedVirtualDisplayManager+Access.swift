@@ -52,11 +52,12 @@ extension SharedVirtualDisplayManager {
         generationChangeHandler = handler
     }
 
-    /// Get the shared display bounds
-    /// Uses the known resolution instead of CGDisplayBounds (which returns stale values for new displays)
+    /// Get the shared display bounds in logical points.
+    /// Uses the known logical resolution instead of CGDisplayBounds (which can return stale values for new displays).
     func getDisplayBounds() -> CGRect? {
         guard let display = sharedDisplay else { return nil }
-        return CGVirtualDisplayBridge.getDisplayBounds(display.displayID, knownResolution: display.resolution)
+        let logicalResolution = SharedVirtualDisplayManager.logicalResolution(for: display.resolution)
+        return CGVirtualDisplayBridge.getDisplayBounds(display.displayID, knownResolution: logicalResolution)
     }
 
     /// Check if there's an active shared display

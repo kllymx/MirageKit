@@ -305,7 +305,8 @@ public final class MirageClientService {
 
     #if os(iOS) || os(visionOS)
     /// Cached drawable size from the Metal view.
-    public static var lastKnownDrawableSize: CGSize = .zero
+    public static var lastKnownViewSize: CGSize = .zero
+    public static var lastKnownDrawablePixelSize: CGSize = .zero
     /// Cached max refresh rate from the active screen (for external display support).
     public static var lastKnownScreenMaxFPS: Int = 0
     #endif

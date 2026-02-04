@@ -14,8 +14,7 @@ import Foundation
 extension StreamContext {
     func applyDerivedQuality(for outputSize: CGSize, logLabel: String?) async {
         guard let targetBitrate = MirageBitrateQualityMapper.normalizedTargetBitrate(
-            minBitrate: encoderConfig.minBitrate,
-            maxBitrate: encoderConfig.maxBitrate
+            bitrate: encoderConfig.bitrate
         ) else {
             return
         }

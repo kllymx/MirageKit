@@ -34,6 +34,7 @@ extension StreamContext {
         let packetSender = StreamPacketSender(maxPayloadSize: maxPayloadSize, onEncodedFrame: onEncodedFrame)
         self.packetSender = packetSender
         await packetSender.start()
+        await packetSender.setTargetBitrateBps(encoderConfig.bitrate)
 
         let captureTarget = streamTargetDimensions(windowFrame: window.frame)
         baseCaptureSize = CGSize(width: captureTarget.width, height: captureTarget.height)
@@ -113,7 +114,6 @@ extension StreamContext {
                     dimensionToken: dimToken,
                     epoch: epoch,
                     fecBlockSize: fecBlockSize,
-                    lossMode: lossModeActive,
                     wireBytes: wireBytes,
                     logPrefix: "Frame",
                     generation: generation,
@@ -168,6 +168,7 @@ extension StreamContext {
         let packetSender = StreamPacketSender(maxPayloadSize: maxPayloadSize, onEncodedFrame: onEncodedFrame)
         self.packetSender = packetSender
         await packetSender.start()
+        await packetSender.setTargetBitrateBps(encoderConfig.bitrate)
 
         let captureResolution = resolution ?? CGSize(width: display.width, height: display.height)
         baseCaptureSize = captureResolution
@@ -247,7 +248,6 @@ extension StreamContext {
                     dimensionToken: dimToken,
                     epoch: epoch,
                     fecBlockSize: fecBlockSize,
-                    lossMode: lossModeActive,
                     wireBytes: wireBytes,
                     logPrefix: "Login frame",
                     generation: generation,
@@ -300,6 +300,7 @@ extension StreamContext {
         let packetSender = StreamPacketSender(maxPayloadSize: maxPayloadSize, onEncodedFrame: onEncodedFrame)
         self.packetSender = packetSender
         await packetSender.start()
+        await packetSender.setTargetBitrateBps(encoderConfig.bitrate)
 
         let encoder = HEVCEncoder(
             configuration: encoderConfig,
@@ -378,7 +379,6 @@ extension StreamContext {
                     dimensionToken: dimToken,
                     epoch: epoch,
                     fecBlockSize: fecBlockSize,
-                    lossMode: lossModeActive,
                     wireBytes: wireBytes,
                     logPrefix: "Desktop frame",
                     generation: generation,

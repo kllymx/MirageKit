@@ -33,8 +33,8 @@ struct StartStreamMessage: Codable {
     /// If nil, host uses window size × scaleFactor
     var pixelWidth: Int?
     var pixelHeight: Int?
-    /// Client's physical display resolution in pixels (for virtual display sizing)
-    /// Virtual display will be created at this resolution
+    /// Client's logical display size in points (view bounds) for virtual display sizing
+    /// Host applies HiDPI (2x) to determine virtual display pixel resolution
     var displayWidth: Int?
     var displayHeight: Int?
     /// Client-requested keyframe interval in frames
@@ -47,10 +47,8 @@ struct StartStreamMessage: Codable {
     var colorSpace: MirageColorSpace?
     /// Client-requested ScreenCaptureKit queue depth
     var captureQueueDepth: Int?
-    /// Client-requested minimum target bitrate (bits per second)
-    var minBitrate: Int?
-    /// Client-requested maximum target bitrate (bits per second)
-    var maxBitrate: Int?
+    /// Client-requested target bitrate (bits per second)
+    var bitrate: Int?
     /// Client-requested stream scale (0.1-1.0)
     /// Applies post-capture downscaling without resizing the host window
     var streamScale: CGFloat?
@@ -75,8 +73,7 @@ struct StartStreamMessage: Codable {
         case pixelFormat
         case colorSpace
         case captureQueueDepth
-        case minBitrate
-        case maxBitrate
+        case bitrate
         case streamScale
         case latencyMode
         case maxRefreshRate

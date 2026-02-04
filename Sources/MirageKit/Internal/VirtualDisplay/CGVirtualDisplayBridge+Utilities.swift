@@ -38,7 +38,15 @@ extension CGVirtualDisplayBridge {
             let bounds = CGDisplayBounds(displayID)
             lastBounds = bounds
 
-            if online, bounds.width > 0, bounds.height > 0 { return bounds }
+            if online, bounds.width > 0, bounds.height > 0 {
+                if expectedResolution.width > 0, expectedResolution.height > 0 {
+                    let widthDelta = abs(bounds.width - expectedResolution.width)
+                    let heightDelta = abs(bounds.height - expectedResolution.height)
+                    if widthDelta <= 1, heightDelta <= 1 { return bounds }
+                } else {
+                    return bounds
+                }
+            }
 
             let sleepMs = Int(max(10.0, pollInterval * 1000.0))
             try? await Task.sleep(for: .milliseconds(sleepMs))
@@ -76,14 +84,15 @@ extension CGVirtualDisplayBridge {
         let origin = configuredDisplayOrigins[displayID] ?? rawBounds.origin
 
         if rawBounds.width > 0, rawBounds.height > 0 {
-            let bounds = CGRect(origin: origin, size: rawBounds.size)
-            if abs(rawBounds.width - knownResolution.width) > 1 || abs(rawBounds.height - knownResolution.height) > 1 {
-                MirageLogger
-                    .host(
-                        "getDisplayBounds(\(displayID)): raw size \(rawBounds.size) differs from knownResolution \(knownResolution) (origin \(origin))"
-                    )
+            let widthDelta = abs(rawBounds.width - knownResolution.width)
+            let heightDelta = abs(rawBounds.height - knownResolution.height)
+            if widthDelta <= 1, heightDelta <= 1 {
+                return CGRect(origin: origin, size: rawBounds.size)
             }
-            return bounds
+            MirageLogger
+                .host(
+                    "getDisplayBounds(\(displayID)): raw size \(rawBounds.size) differs from knownResolution \(knownResolution) (origin \(origin))"
+                )
         }
 
         // Fallback to known resolution when raw bounds are not available yet.

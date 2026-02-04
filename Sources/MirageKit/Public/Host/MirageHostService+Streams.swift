@@ -26,8 +26,7 @@ public extension MirageHostService {
         pixelFormat: MiragePixelFormat? = nil,
         colorSpace: MirageColorSpace? = nil,
         captureQueueDepth: Int? = nil,
-        minBitrate: Int? = nil,
-        maxBitrate: Int? = nil
+        bitrate: Int? = nil
         // hdr: Bool = false
     )
     async throws -> MirageStreamSession {
@@ -73,8 +72,7 @@ public extension MirageHostService {
             pixelFormat: pixelFormat,
             colorSpace: colorSpace,
             captureQueueDepth: captureQueueDepth,
-            minBitrate: minBitrate,
-            maxBitrate: maxBitrate
+            bitrate: bitrate
         )
 
         // TODO: HDR support - requires proper virtual display EDR configuration
@@ -131,16 +129,22 @@ public extension MirageHostService {
             // Use virtual display if client provides display resolution, otherwise use legacy window capture
             if let displayResolution = clientDisplayResolution, displayResolution.width > 0,
                displayResolution.height > 0 {
+                let virtualDisplayResolution = virtualDisplayPixelResolution(
+                    for: displayResolution,
+                    client: client
+                )
                 // Virtual display mode - captures entire virtual display at client resolution
                 MirageLogger
                     .host(
-                        "Starting stream with virtual display at \(Int(displayResolution.width))x\(Int(displayResolution.height))"
+                        "Starting stream with virtual display at " +
+                            "\(Int(displayResolution.width))x\(Int(displayResolution.height)) pts " +
+                            "(\(Int(virtualDisplayResolution.width))x\(Int(virtualDisplayResolution.height)) px)"
                     )
 
                 try await context.startWithVirtualDisplay(
                     windowWrapper: windowWrapper,
                     applicationWrapper: applicationWrapper,
-                    clientDisplayResolution: displayResolution,
+                    clientDisplayResolution: virtualDisplayResolution,
                     onEncodedFrame: { [weak self] packetData, _, releasePacket in
                         guard let self else {
                             releasePacket()
@@ -258,33 +262,28 @@ public extension MirageHostService {
         pixelFormat: MiragePixelFormat?,
         colorSpace: MirageColorSpace?,
         captureQueueDepth: Int?,
-        minBitrate: Int?,
-        maxBitrate: Int?
+        bitrate: Int?
     ) -> MirageEncoderConfiguration {
         var effectiveEncoderConfig = encoderConfig
         if keyFrameInterval != nil || pixelFormat != nil ||
-            colorSpace != nil || captureQueueDepth != nil || minBitrate != nil || maxBitrate != nil {
+            colorSpace != nil || captureQueueDepth != nil || bitrate != nil {
             effectiveEncoderConfig = encoderConfig.withOverrides(
                 keyFrameInterval: keyFrameInterval,
                 pixelFormat: pixelFormat,
                 colorSpace: colorSpace,
                 captureQueueDepth: captureQueueDepth,
-                minBitrate: minBitrate,
-                maxBitrate: maxBitrate
+                bitrate: bitrate
             )
             if let interval = keyFrameInterval { MirageLogger.host("Using client-requested keyframe interval: \(interval) frames") }
             if let colorSpace { MirageLogger.host("Using client-requested color space: \(colorSpace.displayName)") }
             if let captureQueueDepth { MirageLogger.host("Using client-requested capture queue depth: \(captureQueueDepth)") }
-            if let minBitrate { MirageLogger.host("Using client-requested minimum bitrate: \(minBitrate)") }
-            if let maxBitrate { MirageLogger.host("Using client-requested maximum bitrate: \(maxBitrate)") }
+            if let bitrate { MirageLogger.host("Using client-requested bitrate: \(bitrate)") }
         }
 
         if let normalized = MirageBitrateQualityMapper.normalizedTargetBitrate(
-            minBitrate: effectiveEncoderConfig.minBitrate,
-            maxBitrate: effectiveEncoderConfig.maxBitrate
+            bitrate: effectiveEncoderConfig.bitrate
         ) {
-            effectiveEncoderConfig.minBitrate = normalized
-            effectiveEncoderConfig.maxBitrate = normalized
+            effectiveEncoderConfig.bitrate = normalized
         }
 
         // Apply target frame rate override if specified (based on P2P + client capability)

@@ -28,7 +28,7 @@ public extension MirageClientService {
     /// - Parameters:
     ///   - bundleIdentifier: Bundle identifier of the app to stream.
     ///   - scaleFactor: Optional display scale factor (e.g., 2.0 for Retina).
-    ///   - displayResolution: Client's display resolution for virtual display sizing.
+    ///   - displayResolution: Client's logical display size in points for virtual display sizing.
     ///   - keyFrameInterval: Optional keyframe interval in frames.
     ///   - encoderOverrides: Optional per-stream encoder overrides.
     // TODO: HDR support - requires proper virtual display EDR configuration.
@@ -57,8 +57,7 @@ public extension MirageClientService {
             keyFrameInterval: nil,
             pixelFormat: nil,
             colorSpace: nil,
-            minBitrate: nil,
-            maxBitrate: nil,
+            bitrate: nil,
             streamScale: clampedStreamScale(),
             latencyMode: latencyMode
         )

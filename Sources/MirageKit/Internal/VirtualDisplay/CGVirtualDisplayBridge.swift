@@ -242,12 +242,16 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         )
     }
 
+    private static func serialDefaultsKey(for colorSpace: MirageColorSpace) -> String {
+        "\(serialDefaultsPrefix).\(colorSpace.rawValue)"
+    }
+
     private static func persistentSerialNumber(for colorSpace: MirageColorSpace) -> UInt32 {
         if let cached = cachedSerialNumbers[colorSpace] {
             return cached
         }
 
-        let defaultsKey = "\(serialDefaultsPrefix).\(colorSpace.rawValue)"
+        let defaultsKey = serialDefaultsKey(for: colorSpace)
         let stored = UserDefaults.standard.integer(forKey: defaultsKey)
         if stored > 0, stored <= Int(UInt32.max) {
             let serial = UInt32(stored)
@@ -263,6 +267,19 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         UserDefaults.standard.set(Int(serial), forKey: defaultsKey)
         cachedSerialNumbers[colorSpace] = serial
         return serial
+    }
+
+    static func invalidatePersistentSerial(for colorSpace: MirageColorSpace) {
+        cachedSerialNumbers[colorSpace] = nil
+        let defaultsKey = serialDefaultsKey(for: colorSpace)
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        MirageLogger.host("Invalidated virtual display serial for \(colorSpace.displayName)")
+    }
+
+    static func invalidateAllPersistentSerials() {
+        for colorSpace in MirageColorSpace.allCases {
+            invalidatePersistentSerial(for: colorSpace)
+        }
     }
 
     /// Update an existing virtual display's resolution without recreating it

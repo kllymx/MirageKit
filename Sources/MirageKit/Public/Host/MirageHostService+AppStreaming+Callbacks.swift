@@ -100,8 +100,7 @@ extension MirageHostService {
                         pixelFormat: encoderSettings?.pixelFormat,
                         colorSpace: encoderSettings?.colorSpace,
                         captureQueueDepth: encoderSettings?.captureQueueDepth,
-                        minBitrate: encoderSettings?.minBitrate,
-                        maxBitrate: encoderSettings?.maxBitrate
+                        bitrate: encoderSettings?.bitrate
                     )
 
                     let isResizable = await appStreamManager.checkWindowResizability(
@@ -155,8 +154,7 @@ extension MirageHostService {
                 pixelFormat: encoderSettings?.pixelFormat,
                 colorSpace: encoderSettings?.colorSpace,
                 captureQueueDepth: encoderSettings?.captureQueueDepth,
-                minBitrate: encoderSettings?.minBitrate,
-                maxBitrate: encoderSettings?.maxBitrate
+                bitrate: encoderSettings?.bitrate
             )
 
             let isResizable = await appStreamManager.checkWindowResizability(

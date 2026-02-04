@@ -13,6 +13,38 @@ import Foundation
 // MARK: - Virtual Display Support
 
 extension MirageHostService {
+    private func virtualDisplayScaleFactor(for _: MirageConnectedClient?) -> CGFloat {
+        // HiDPI virtual displays are always 2x logical points.
+        // We intentionally ignore device-native scale to keep the host display
+        // aligned with client view bounds.
+        2.0
+    }
+
+    func virtualDisplayPixelResolution(
+        for logicalResolution: CGSize,
+        client: MirageConnectedClient?
+    )
+    -> CGSize {
+        guard logicalResolution.width > 0, logicalResolution.height > 0 else { return logicalResolution }
+        let scale = virtualDisplayScaleFactor(for: client)
+        let width = CGFloat(StreamContext.alignedEvenPixel(logicalResolution.width * scale))
+        let height = CGFloat(StreamContext.alignedEvenPixel(logicalResolution.height * scale))
+        return CGSize(width: width, height: height)
+    }
+
+    func virtualDisplayLogicalResolution(
+        for pixelResolution: CGSize,
+        client: MirageConnectedClient?
+    )
+    -> CGSize {
+        guard pixelResolution.width > 0, pixelResolution.height > 0 else { return pixelResolution }
+        let scale = virtualDisplayScaleFactor(for: client)
+        return CGSize(
+            width: pixelResolution.width / scale,
+            height: pixelResolution.height / scale
+        )
+    }
+
     /// Send content bounds update to client
     func sendContentBoundsUpdate(streamID: StreamID, bounds: CGRect, to client: MirageConnectedClient) async {
         guard let clientContext = clientsByConnection.values.first(where: { $0.client.id == client.id }) else { return }
@@ -64,8 +96,7 @@ extension MirageHostService {
                 pixelFormat: encoderSettings.pixelFormat,
                 colorSpace: encoderSettings.colorSpace,
                 captureQueueDepth: encoderSettings.captureQueueDepth,
-                minBitrate: encoderSettings.minBitrate,
-                maxBitrate: encoderSettings.maxBitrate
+                bitrate: encoderSettings.bitrate
             )
             MirageLogger.host("Auto-started stream for new independent window \(window.id)")
         } catch {
@@ -75,29 +106,15 @@ extension MirageHostService {
 
     func handleStreamScaleChange(streamID: StreamID, streamScale: CGFloat) async {
         let clampedScale = max(0.1, min(1.0, streamScale))
-        if streamID == desktopStreamID, desktopUsesScaledVirtualDisplay {
-            desktopRequestedStreamScale = clampedScale
-            let baseResolution: CGSize
-            if let stored = desktopBaseDisplayResolution {
-                baseResolution = stored
-            } else if let desktopContext = desktopStreamContext {
-                let encoded = await desktopContext.getEncodedDimensions()
-                baseResolution = CGSize(width: encoded.width, height: encoded.height)
-                desktopBaseDisplayResolution = baseResolution
-            } else {
-                baseResolution = .zero
-            }
-
-            let scaledResolution = resolvedDesktopVirtualDisplayResolution(
-                baseResolution: baseResolution,
-                streamScale: clampedScale
-            )
-            await handleDisplayResolutionChange(streamID: streamID, newResolution: scaledResolution)
-            return
-        }
 
         guard let context = streamsByID[streamID] else {
             MirageLogger.debug(.host, "No stream found for stream scale change: \(streamID)")
+            return
+        }
+
+        let currentScale = await context.getStreamScale()
+        if abs(currentScale - clampedScale) <= 0.001 {
+            MirageLogger.stream("Stream scale change skipped (already \(currentScale)) for stream \(streamID)")
             return
         }
 
@@ -125,7 +142,11 @@ extension MirageHostService {
                 try await desktopContext.updateFrameRate(targetFrameRate)
                 if forceDisplayRefresh {
                     let encoded = await desktopContext.getEncodedDimensions()
-                    let resolution = CGSize(width: encoded.width, height: encoded.height)
+                    let pixelResolution = CGSize(width: encoded.width, height: encoded.height)
+                    let resolution = virtualDisplayLogicalResolution(
+                        for: pixelResolution,
+                        client: desktopStreamClientContext?.client
+                    )
                     await handleDisplayResolutionChange(streamID: streamID, newResolution: resolution)
                 }
                 let appliedRate = await desktopContext.getTargetFrameRate()
@@ -153,8 +174,8 @@ extension MirageHostService {
             try await context.updateFrameRate(targetFrameRate)
             if forceDisplayRefresh, await context.isUsingVirtualDisplay() {
                 let encoded = await context.getEncodedDimensions()
-                let resolution = CGSize(width: encoded.width, height: encoded.height)
-                try await context.updateVirtualDisplayResolution(newResolution: resolution)
+                let pixelResolution = CGSize(width: encoded.width, height: encoded.height)
+                try await context.updateVirtualDisplayResolution(newResolution: pixelResolution)
                 await sendStreamScaleUpdate(streamID: streamID)
             }
             let appliedRate = await context.getTargetFrameRate()
@@ -226,29 +247,40 @@ extension MirageHostService {
         // Desktop streaming needs to resize the entire virtual display and update capture
         if streamID == desktopStreamID, let desktopContext = desktopStreamContext {
             do {
+                let logicalResolution = newResolution
+                let pixelResolution = virtualDisplayPixelResolution(
+                    for: logicalResolution,
+                    client: desktopStreamClientContext?.client
+                )
                 let targetFrameRate = await desktopContext.getTargetFrameRate()
                 let streamRefreshRate = SharedVirtualDisplayManager.streamRefreshRate(for: targetFrameRate)
 
                 if let snapshot = await SharedVirtualDisplayManager.shared.getDisplaySnapshot() {
                     let currentResolution = snapshot.resolution
                     let currentRefresh = Int(snapshot.refreshRate.rounded())
-                    if currentResolution == newResolution, currentRefresh == streamRefreshRate {
+                    if currentResolution == pixelResolution, currentRefresh == streamRefreshRate {
                         MirageLogger
                             .host(
-                                "Desktop stream resize skipped (already \(Int(newResolution.width))x\(Int(newResolution.height))@\(streamRefreshRate)Hz)"
+                                "Desktop stream resize skipped (already " +
+                                    "\(Int(logicalResolution.width))x\(Int(logicalResolution.height)) pts " +
+                                    "\(Int(pixelResolution.width))x\(Int(pixelResolution.height)) px @\(streamRefreshRate)Hz)"
                             )
                         return
                     }
                 }
 
                 MirageLogger
-                    .host("Desktop stream resize requested: \(Int(newResolution.width))x\(Int(newResolution.height))")
+                    .host(
+                        "Desktop stream resize requested: " +
+                            "\(Int(logicalResolution.width))x\(Int(logicalResolution.height)) pts " +
+                            "(\(Int(pixelResolution.width))x\(Int(pixelResolution.height)) px)"
+                    )
 
                 // 1. Update the virtual display resolution in place (no recreate, no displayID change)
                 //    This uses applySettings: to change the display mode without destroying it
                 try await SharedVirtualDisplayManager.shared.updateDisplayResolution(
                     for: .desktopStream,
-                    newResolution: newResolution,
+                    newResolution: pixelResolution,
                     refreshRate: streamRefreshRate
                 )
 
@@ -264,20 +296,22 @@ extension MirageHostService {
                 // 2. Update the capture/encoder dimensions to match new resolution
                 //    Since displayID doesn't change, we just need to update the stream config
                 try await desktopContext.updateResolution(
-                    width: Int(newResolution.width),
-                    height: Int(newResolution.height)
+                    width: Int(pixelResolution.width),
+                    height: Int(pixelResolution.height)
                 )
 
                 // 3. Update input cache for mirrored content bounds on the physical display.
                 let primaryBounds = refreshDesktopPrimaryPhysicalBounds()
                 let inputBounds = resolvedDesktopInputBounds(
                     physicalBounds: primaryBounds,
-                    virtualResolution: newResolution
+                    virtualResolution: pixelResolution
                 )
                 inputStreamCacheActor.updateWindowFrame(streamID, newFrame: inputBounds)
                 MirageLogger
                     .host(
-                        "Desktop stream resized to \(Int(newResolution.width))x\(Int(newResolution.height)), input bounds: \(inputBounds)"
+                        "Desktop stream resized to " +
+                            "\(Int(logicalResolution.width))x\(Int(logicalResolution.height)) pts " +
+                            "(\(Int(pixelResolution.width))x\(Int(pixelResolution.height)) px), input bounds: \(inputBounds)"
                     )
 
                 // 4. Send desktopStreamStarted to notify client that resize is complete
@@ -313,7 +347,13 @@ extension MirageHostService {
         }
 
         do {
-            try await context.updateVirtualDisplayResolution(newResolution: newResolution)
+            let client = activeStreams.first(where: { $0.id == streamID })?.client
+            let logicalResolution = newResolution
+            let pixelResolution = virtualDisplayPixelResolution(
+                for: logicalResolution,
+                client: client
+            )
+            try await context.updateVirtualDisplayResolution(newResolution: pixelResolution)
 
             // Update the cached shared display bounds after resolution change
             // Use SharedVirtualDisplayManager's getDisplayBounds which uses known resolution
@@ -328,7 +368,9 @@ extension MirageHostService {
 
             MirageLogger
                 .host(
-                    "Updated virtual display resolution for stream \(streamID) to \(Int(newResolution.width))x\(Int(newResolution.height))"
+                    "Updated virtual display resolution for stream \(streamID) to " +
+                        "\(Int(logicalResolution.width))x\(Int(logicalResolution.height)) pts " +
+                        "(\(Int(pixelResolution.width))x\(Int(pixelResolution.height)) px)"
                 )
         } catch {
             MirageLogger.error(.host, "Failed to update virtual display resolution: \(error)")

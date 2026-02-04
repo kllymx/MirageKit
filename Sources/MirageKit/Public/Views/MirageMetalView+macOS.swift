@@ -35,6 +35,15 @@ public class MirageMetalView: MTKView {
     /// Callback when drawable metrics change - reports pixel size and scale factor
     public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
 
+    /// Optional cap for drawable pixel dimensions (applied in addition to 5K limit).
+    public var maxDrawableSize: CGSize? {
+        didSet {
+            guard maxDrawableSize != oldValue else { return }
+            reportDrawableMetricsIfChanged()
+            requestDraw()
+        }
+    }
+
     /// Last reported drawable size to avoid redundant callbacks
     private var lastReportedDrawableSize: CGSize = .zero
     private var registeredStreamID: StreamID?
@@ -97,7 +106,11 @@ public class MirageMetalView: MTKView {
 
     /// Report actual drawable pixel size to ensure host captures at correct resolution
     private func reportDrawableMetricsIfChanged() {
-        let rawDrawableSize = drawableSize
+        let scale = window?.backingScaleFactor ?? 2.0
+        let rawDrawableSize = CGSize(
+            width: bounds.width * scale,
+            height: bounds.height * scale
+        )
         let cappedDrawableSize = cappedDrawableSize(rawDrawableSize)
         if cappedDrawableSize != rawDrawableSize { drawableSize = cappedDrawableSize }
         if cappedDrawableSize != lastReportedDrawableSize, cappedDrawableSize.width > 0, cappedDrawableSize.height > 0 {
@@ -132,14 +145,15 @@ public class MirageMetalView: MTKView {
         var width = size.width
         var height = size.height
         let aspectRatio = width / height
+        let maxSize = resolvedMaxDrawableSize()
 
-        if width > Self.maxDrawableWidth {
-            width = Self.maxDrawableWidth
+        if width > maxSize.width {
+            width = maxSize.width
             height = width / aspectRatio
         }
 
-        if height > Self.maxDrawableHeight {
-            height = Self.maxDrawableHeight
+        if height > maxSize.height {
+            height = maxSize.height
             width = height * aspectRatio
         }
 
@@ -153,6 +167,19 @@ public class MirageMetalView: MTKView {
         let rounded = CGFloat(Int(value.rounded()))
         let even = rounded - CGFloat(Int(rounded) % 2)
         return max(2, even)
+    }
+
+    private func resolvedMaxDrawableSize() -> CGSize {
+        let defaultSize = CGSize(width: Self.maxDrawableWidth, height: Self.maxDrawableHeight)
+        guard let maxDrawableSize,
+              maxDrawableSize.width > 0,
+              maxDrawableSize.height > 0 else {
+            return defaultSize
+        }
+        return CGSize(
+            width: min(defaultSize.width, maxDrawableSize.width),
+            height: min(defaultSize.height, maxDrawableSize.height)
+        )
     }
 
     override public func draw(_: CGRect) {

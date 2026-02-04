@@ -25,7 +25,6 @@ actor StreamPacketSender {
         let dimensionToken: UInt16
         let epoch: UInt16
         let fecBlockSize: Int
-        let lossMode: Bool
         let wireBytes: Int
         let logPrefix: String
         let generation: UInt32
@@ -45,11 +44,15 @@ actor StreamPacketSender {
     private nonisolated(unsafe) var dropNonKeyframesUntilKeyframe: Bool = false
     private nonisolated(unsafe) var latestKeyframeFrameNumber: UInt32 = 0
     private let queueLock = NSLock()
-    private let basePacingBurstSize = 16
-    private let pacingThresholdBytes = 512 * 1024
-    private let basePacingDelay = Duration.milliseconds(1)
-    private let largeFrameThresholdBytes = 800 * 1024
-    private let hugeFrameThresholdBytes = 1500 * 1024
+
+    private var pacerRateBps: Int = 0
+    private var pacerRateBytesPerSecond: Double = 0
+    private var pacerTokens: Double = 0
+    private var pacerLastTime: CFAbsoluteTime = 0
+    private var pacerMaxBurstBytes: Double = 0
+    private let pacerBurstSeconds: Double = 0.0025
+    private let pacerMinBurstPackets: Int = 8
+    private let pacerMaxBurstPackets: Int = 64
 
     init(
         maxPayloadSize: Int,
@@ -67,6 +70,7 @@ actor StreamPacketSender {
         queueLock.withLock {
             queuedBytes = 0
         }
+        resetPacerState(for: pacerRateBps)
         sendTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             for await item in stream {
@@ -83,6 +87,12 @@ actor StreamPacketSender {
         queueLock.withLock {
             queuedBytes = 0
         }
+    }
+
+    func setTargetBitrateBps(_ bitrate: Int?) {
+        let sanitized = max(0, bitrate ?? 0)
+        guard sanitized != pacerRateBps else { return }
+        resetPacerState(for: sanitized)
     }
 
     func bumpGeneration(reason: String) {
@@ -176,17 +186,8 @@ actor StreamPacketSender {
         let totalFragments = dataFragmentCount + parityFragmentCount
         let timestamp = UInt64(CMTimeGetSeconds(item.presentationTime) * 1_000_000_000)
 
-        let (burstSize, pacingDelay) = pacingConfig(
-            for: item.encodedData.count,
-            totalFragments: totalFragments,
-            lossMode: item.lossMode
-        )
-        let burstCount = max(1, (totalFragments + burstSize - 1) / burstSize)
-        let shouldPace = item.encodedData.count >= pacingThresholdBytes && burstCount > 1
-
         var currentSequence = item.sequenceNumberStart
-
-        for burstIndex in 0 ..< burstCount {
+        for fragmentIndex in 0 ..< totalFragments {
             if item.generation != generation {
                 MirageLogger
                     .stream("Aborting send for frame \(item.frameNumber) (gen \(item.generation) != \(generation))")
@@ -198,143 +199,140 @@ actor StreamPacketSender {
                 return
             }
 
-            let burstStart = burstIndex * burstSize
-            let burstEnd = min(burstStart + burstSize, totalFragments)
+            var flags = item.additionalFlags
+            if fragmentIndex > 0, flags.contains(.discontinuity) { flags.remove(.discontinuity) }
+            if item.isKeyframe { flags.insert(.keyframe) }
+            if fragmentIndex == totalFragments - 1 { flags.insert(.endOfFrame) }
+            if item.isKeyframe, fragmentIndex == 0 { flags.insert(.parameterSet) }
 
-            for fragmentIndex in burstStart ..< burstEnd {
-                var flags = item.additionalFlags
-                if fragmentIndex > 0, flags.contains(.discontinuity) { flags.remove(.discontinuity) }
-                if item.isKeyframe { flags.insert(.keyframe) }
-                if fragmentIndex == totalFragments - 1 { flags.insert(.endOfFrame) }
-                if item.isKeyframe, fragmentIndex == 0 { flags.insert(.parameterSet) }
+            if fragmentIndex < dataFragmentCount {
+                let start = fragmentIndex * maxPayload
+                let end = min(start + maxPayload, frameByteCount)
+                let fragmentSize = end - start
+                guard fragmentSize > 0 else { continue }
 
-                if fragmentIndex < dataFragmentCount {
-                    let start = fragmentIndex * maxPayload
-                    let end = min(start + maxPayload, frameByteCount)
-                    let fragmentSize = end - start
-                    guard fragmentSize > 0 else { continue }
+                let packetLength = mirageHeaderSize + fragmentSize
+                await paceIfNeeded(packetBytes: packetLength)
 
-                    item.encodedData.withUnsafeBytes { buffer in
-                        guard let baseAddress = buffer.baseAddress else { return }
-                        let fragmentPtr = baseAddress.advanced(by: start)
-                        let fragmentBuffer = UnsafeRawBufferPointer(start: fragmentPtr, count: fragmentSize)
-                        let checksum = CRC32.calculate(fragmentBuffer)
+                item.encodedData.withUnsafeBytes { buffer in
+                    guard let baseAddress = buffer.baseAddress else { return }
+                    let fragmentPtr = baseAddress.advanced(by: start)
+                    let fragmentBuffer = UnsafeRawBufferPointer(start: fragmentPtr, count: fragmentSize)
+                    let checksum = CRC32.calculate(fragmentBuffer)
 
-                        let header = FrameHeader(
-                            flags: flags,
-                            streamID: item.streamID,
-                            sequenceNumber: currentSequence,
-                            timestamp: timestamp,
-                            frameNumber: item.frameNumber,
-                            fragmentIndex: UInt16(fragmentIndex),
-                            fragmentCount: UInt16(totalFragments),
-                            payloadLength: UInt32(fragmentSize),
-                            frameByteCount: UInt32(frameByteCount),
-                            checksum: checksum,
-                            contentRect: item.contentRect,
-                            dimensionToken: item.dimensionToken,
-                            epoch: item.epoch
-                        )
-
-                        let packetBuffer = packetBufferPool.acquire()
-                        let packetLength = mirageHeaderSize + fragmentSize
-                        packetBuffer.prepare(length: packetLength)
-
-                        packetBuffer.withMutableBytes { packetBytes in
-                            guard packetBytes.count >= packetLength,
-                                  let baseAddress = packetBytes.baseAddress else {
-                                return
-                            }
-                            let headerBuffer = UnsafeMutableRawBufferPointer(
-                                start: baseAddress,
-                                count: min(packetBytes.count, mirageHeaderSize)
-                            )
-                            header.serialize(into: headerBuffer)
-                            baseAddress.advanced(by: mirageHeaderSize).copyMemory(
-                                from: fragmentPtr,
-                                byteCount: fragmentSize
-                            )
-                        }
-
-                        let packet = packetBuffer.finalize(length: packetLength)
-                        let releasePacket: @Sendable () -> Void = { packetBuffer.release() }
-                        onEncodedFrame(packet, header, releasePacket)
-                    }
-                } else if parityFragmentCount > 0 {
-                    let parityIndex = fragmentIndex - dataFragmentCount
-                    let blockIndex = parityIndex
-                    let blockSize = fecBlockSize
-                    guard blockSize > 0 else { continue }
-                    let blockStart = blockIndex * blockSize
-                    let blockEnd = min(blockStart + blockSize, dataFragmentCount)
-                    guard blockStart < blockEnd else { continue }
-
-                    let parityLength = parityPayloadLength(
-                        frameByteCount: frameByteCount,
-                        blockStart: blockStart,
-                        maxPayload: maxPayload
+                    let header = FrameHeader(
+                        flags: flags,
+                        streamID: item.streamID,
+                        sequenceNumber: currentSequence,
+                        timestamp: timestamp,
+                        frameNumber: item.frameNumber,
+                        fragmentIndex: UInt16(fragmentIndex),
+                        fragmentCount: UInt16(totalFragments),
+                        payloadLength: UInt32(fragmentSize),
+                        frameByteCount: UInt32(frameByteCount),
+                        checksum: checksum,
+                        contentRect: item.contentRect,
+                        dimensionToken: item.dimensionToken,
+                        epoch: item.epoch
                     )
-                    let parityData = computeParity(
-                        encodedData: item.encodedData,
-                        frameByteCount: frameByteCount,
-                        blockStart: blockStart,
-                        blockEnd: blockEnd,
-                        payloadLength: parityLength,
-                        maxPayload: maxPayload
-                    )
-                    guard !parityData.isEmpty else { continue }
 
-                    var parityFlags = flags
-                    parityFlags.insert(.fecParity)
+                    let packetBuffer = packetBufferPool.acquire()
+                    packetBuffer.prepare(length: packetLength)
 
-                    parityData.withUnsafeBytes { parityBuffer in
-                        guard let parityBase = parityBuffer.baseAddress else { return }
-                        let checksum = CRC32.calculate(parityBuffer)
-                        let header = FrameHeader(
-                            flags: parityFlags,
-                            streamID: item.streamID,
-                            sequenceNumber: currentSequence,
-                            timestamp: timestamp,
-                            frameNumber: item.frameNumber,
-                            fragmentIndex: UInt16(fragmentIndex),
-                            fragmentCount: UInt16(totalFragments),
-                            payloadLength: UInt32(parityData.count),
-                            frameByteCount: UInt32(frameByteCount),
-                            checksum: checksum,
-                            contentRect: item.contentRect,
-                            dimensionToken: item.dimensionToken,
-                            epoch: item.epoch
-                        )
-
-                        let packetBuffer = packetBufferPool.acquire()
-                        let packetLength = mirageHeaderSize + parityData.count
-                        packetBuffer.prepare(length: packetLength)
-
-                        packetBuffer.withMutableBytes { packetBytes in
-                            guard packetBytes.count >= packetLength,
-                                  let baseAddress = packetBytes.baseAddress else {
-                                return
-                            }
-                            let headerBuffer = UnsafeMutableRawBufferPointer(
-                                start: baseAddress,
-                                count: min(packetBytes.count, mirageHeaderSize)
-                            )
-                            header.serialize(into: headerBuffer)
-                            baseAddress.advanced(by: mirageHeaderSize).copyMemory(
-                                from: parityBase,
-                                byteCount: parityData.count
-                            )
+                    packetBuffer.withMutableBytes { packetBytes in
+                        guard packetBytes.count >= packetLength,
+                              let baseAddress = packetBytes.baseAddress else {
+                            return
                         }
-
-                        let packet = packetBuffer.finalize(length: packetLength)
-                        let releasePacket: @Sendable () -> Void = { packetBuffer.release() }
-                        onEncodedFrame(packet, header, releasePacket)
+                        let headerBuffer = UnsafeMutableRawBufferPointer(
+                            start: baseAddress,
+                            count: min(packetBytes.count, mirageHeaderSize)
+                        )
+                        header.serialize(into: headerBuffer)
+                        baseAddress.advanced(by: mirageHeaderSize).copyMemory(
+                            from: fragmentPtr,
+                            byteCount: fragmentSize
+                        )
                     }
+
+                    let packet = packetBuffer.finalize(length: packetLength)
+                    let releasePacket: @Sendable () -> Void = { packetBuffer.release() }
+                    onEncodedFrame(packet, header, releasePacket)
                 }
-                currentSequence += 1
-            }
+            } else if parityFragmentCount > 0 {
+                let parityIndex = fragmentIndex - dataFragmentCount
+                let blockIndex = parityIndex
+                let blockSize = fecBlockSize
+                guard blockSize > 0 else { continue }
+                let blockStart = blockIndex * blockSize
+                let blockEnd = min(blockStart + blockSize, dataFragmentCount)
+                guard blockStart < blockEnd else { continue }
 
-            if shouldPace, burstIndex < burstCount - 1 { try? await Task.sleep(for: pacingDelay) }
+                let parityLength = parityPayloadLength(
+                    frameByteCount: frameByteCount,
+                    blockStart: blockStart,
+                    maxPayload: maxPayload
+                )
+                let parityData = computeParity(
+                    encodedData: item.encodedData,
+                    frameByteCount: frameByteCount,
+                    blockStart: blockStart,
+                    blockEnd: blockEnd,
+                    payloadLength: parityLength,
+                    maxPayload: maxPayload
+                )
+                guard !parityData.isEmpty else { continue }
+
+                let packetLength = mirageHeaderSize + parityData.count
+                await paceIfNeeded(packetBytes: packetLength)
+
+                var parityFlags = flags
+                parityFlags.insert(.fecParity)
+
+                parityData.withUnsafeBytes { parityBuffer in
+                    guard let parityBase = parityBuffer.baseAddress else { return }
+                    let checksum = CRC32.calculate(parityBuffer)
+                    let header = FrameHeader(
+                        flags: parityFlags,
+                        streamID: item.streamID,
+                        sequenceNumber: currentSequence,
+                        timestamp: timestamp,
+                        frameNumber: item.frameNumber,
+                        fragmentIndex: UInt16(fragmentIndex),
+                        fragmentCount: UInt16(totalFragments),
+                        payloadLength: UInt32(parityData.count),
+                        frameByteCount: UInt32(frameByteCount),
+                        checksum: checksum,
+                        contentRect: item.contentRect,
+                        dimensionToken: item.dimensionToken,
+                        epoch: item.epoch
+                    )
+
+                    let packetBuffer = packetBufferPool.acquire()
+                    packetBuffer.prepare(length: packetLength)
+
+                    packetBuffer.withMutableBytes { packetBytes in
+                        guard packetBytes.count >= packetLength,
+                              let baseAddress = packetBytes.baseAddress else {
+                            return
+                        }
+                        let headerBuffer = UnsafeMutableRawBufferPointer(
+                            start: baseAddress,
+                            count: min(packetBytes.count, mirageHeaderSize)
+                        )
+                        header.serialize(into: headerBuffer)
+                        baseAddress.advanced(by: mirageHeaderSize).copyMemory(
+                            from: parityBase,
+                            byteCount: parityData.count
+                        )
+                    }
+
+                    let packet = packetBuffer.finalize(length: packetLength)
+                    let releasePacket: @Sendable () -> Void = { packetBuffer.release() }
+                    onEncodedFrame(packet, header, releasePacket)
+                }
+            }
+            currentSequence += 1
         }
 
         if item.isKeyframe {
@@ -400,22 +398,50 @@ actor StreamPacketSender {
         return parity
     }
 
-    private func pacingConfig(
-        for encodedBytes: Int,
-        totalFragments: Int,
-        lossMode: Bool
-    )
-    -> (burstSize: Int, pacingDelay: Duration) {
-        if encodedBytes >= hugeFrameThresholdBytes {
-            if lossMode { return (burstSize: min(16, totalFragments), pacingDelay: .microseconds(750)) }
-            return (burstSize: min(32, totalFragments), pacingDelay: .microseconds(250))
+    private func resetPacerState(for bitrateBps: Int) {
+        pacerRateBps = bitrateBps
+        pacerLastTime = CFAbsoluteTimeGetCurrent()
+        guard bitrateBps > 0 else {
+            pacerRateBytesPerSecond = 0
+            pacerTokens = 0
+            pacerMaxBurstBytes = 0
+            return
         }
-        if encodedBytes >= largeFrameThresholdBytes {
-            if lossMode { return (burstSize: min(12, totalFragments), pacingDelay: .milliseconds(1)) }
-            return (burstSize: min(24, totalFragments), pacingDelay: .microseconds(500))
+
+        pacerRateBytesPerSecond = Double(bitrateBps) / 8.0
+        let minBurstBytes = Double(maxPayloadSize * pacerMinBurstPackets)
+        let maxBurstBytes = Double(maxPayloadSize * pacerMaxBurstPackets)
+        let burstFromRate = pacerRateBytesPerSecond * pacerBurstSeconds
+        pacerMaxBurstBytes = min(maxBurstBytes, max(minBurstBytes, burstFromRate))
+        pacerTokens = pacerMaxBurstBytes
+    }
+
+    private func paceIfNeeded(packetBytes: Int) async {
+        guard pacerRateBps > 0, packetBytes > 0 else { return }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = max(0, now - pacerLastTime)
+        if elapsed > 0 {
+            pacerTokens = min(pacerMaxBurstBytes, pacerTokens + elapsed * pacerRateBytesPerSecond)
         }
-        if lossMode { return (burstSize: min(8, totalFragments), pacingDelay: .microseconds(750)) }
-        return (burstSize: min(basePacingBurstSize, totalFragments), pacingDelay: basePacingDelay)
+        pacerLastTime = now
+
+        let packetCost = Double(packetBytes)
+        guard pacerTokens < packetCost else {
+            pacerTokens -= packetCost
+            return
+        }
+
+        let deficit = packetCost - pacerTokens
+        pacerTokens = 0
+        let waitSeconds = deficit / pacerRateBytesPerSecond
+        guard waitSeconds > 0 else { return }
+        do {
+            try await Task.sleep(for: .seconds(waitSeconds))
+        } catch {
+            return
+        }
+        pacerLastTime = CFAbsoluteTimeGetCurrent()
     }
 }
 

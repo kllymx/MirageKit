@@ -135,6 +135,8 @@ MirageStreamContentView(
 
 For a deeper dive into modules and data flows, see `Architecture.md`.
 
+For ColorSync cleanup guidance, see [If-Your-Computer-Feels-Stuttery.md](Sources/MirageKit/Resources/If-Your-Computer-Feels-Stuttery.md).
+
 ## Configuration
 
 ### Encoder Overrides

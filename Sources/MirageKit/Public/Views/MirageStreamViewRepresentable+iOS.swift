@@ -50,6 +50,9 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
     /// Whether the system cursor should be locked/hidden.
     public var cursorLockEnabled: Bool
 
+    /// Optional cap for drawable pixel dimensions.
+    public var maxDrawableSize: CGSize?
+
     public init(
         streamID: StreamID,
         onInputEvent: ((MirageInputEvent) -> Void)? = nil,
@@ -63,7 +66,8 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
         dockSnapEnabled: Bool = false,
         usesVirtualTrackpad: Bool = false,
         softwareKeyboardVisible: Bool = false,
-        cursorLockEnabled: Bool = false
+        cursorLockEnabled: Bool = false,
+        maxDrawableSize: CGSize? = nil
     ) {
         self.streamID = streamID
         self.onInputEvent = onInputEvent
@@ -78,6 +82,7 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
         self.usesVirtualTrackpad = usesVirtualTrackpad
         self.softwareKeyboardVisible = softwareKeyboardVisible
         self.cursorLockEnabled = cursorLockEnabled
+        self.maxDrawableSize = maxDrawableSize
     }
 
     public func makeCoordinator() -> MirageStreamViewCoordinator {
@@ -103,7 +108,8 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
             softwareKeyboardVisible: softwareKeyboardVisible,
             cursorStore: cursorStore,
             cursorPositionStore: cursorPositionStore,
-            cursorLockEnabled: cursorLockEnabled
+            cursorLockEnabled: cursorLockEnabled,
+            maxDrawableSize: maxDrawableSize
         )
         return controller
     }
@@ -127,7 +133,8 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
             softwareKeyboardVisible: softwareKeyboardVisible,
             cursorStore: cursorStore,
             cursorPositionStore: cursorPositionStore,
-            cursorLockEnabled: cursorLockEnabled
+            cursorLockEnabled: cursorLockEnabled,
+            maxDrawableSize: maxDrawableSize
         )
     }
 }
@@ -176,7 +183,8 @@ public final class MirageStreamViewController: UIViewController {
         softwareKeyboardVisible: Bool,
         cursorStore: MirageClientCursorStore?,
         cursorPositionStore: MirageClientCursorPositionStore?,
-        cursorLockEnabled: Bool
+        cursorLockEnabled: Bool,
+        maxDrawableSize: CGSize?
     ) {
         captureView.onInputEvent = onInputEvent
         captureView.onDrawableMetricsChanged = onDrawableMetricsChanged
@@ -190,6 +198,7 @@ public final class MirageStreamViewController: UIViewController {
         captureView.cursorStore = cursorStore
         captureView.cursorPositionStore = cursorPositionStore
         captureView.cursorLockEnabled = cursorLockEnabled
+        captureView.maxDrawableSize = maxDrawableSize
         // Set stream ID for direct frame cache access (bypasses all actor machinery)
         captureView.streamID = streamID
 

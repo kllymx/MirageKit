@@ -40,6 +40,7 @@ extension StreamContext {
         let packetSender = StreamPacketSender(maxPayloadSize: maxPayloadSize, onEncodedFrame: onEncodedFrame)
         self.packetSender = packetSender
         await packetSender.start()
+        await packetSender.setTargetBitrateBps(encoderConfig.bitrate)
 
         MirageLogger
             .stream(
@@ -58,7 +59,7 @@ extension StreamContext {
 
         let displayBounds = CGVirtualDisplayBridge.getDisplayBounds(
             vdContext.displayID,
-            knownResolution: vdContext.resolution
+            knownResolution: SharedVirtualDisplayManager.logicalResolution(for: vdContext.resolution)
         )
         await onVirtualDisplayReady(displayBounds)
 
@@ -174,7 +175,6 @@ extension StreamContext {
                     dimensionToken: dimToken,
                     epoch: epoch,
                     fecBlockSize: fecBlockSize,
-                    lossMode: lossModeActive,
                     wireBytes: wireBytes,
                     logPrefix: "VD Frame",
                     generation: generation,
@@ -245,7 +245,7 @@ extension StreamContext {
 
         let displayBounds = CGVirtualDisplayBridge.getDisplayBounds(
             newContext.displayID,
-            knownResolution: newContext.resolution
+            knownResolution: SharedVirtualDisplayManager.logicalResolution(for: newContext.resolution)
         )
         try await WindowSpaceManager.shared.moveWindow(
             windowID,

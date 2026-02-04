@@ -39,7 +39,7 @@ struct ContentBoundsUpdateMessage: Codable {
 struct DisplayResolutionChangeMessage: Codable {
     /// The stream to update
     let streamID: StreamID
-    /// New display resolution in pixels
+    /// New display size in points (logical view bounds)
     let displayWidth: Int
     let displayHeight: Int
 }
