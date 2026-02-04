@@ -27,15 +27,15 @@ import Foundation
 ///     }
 /// }
 /// ```
-final class ContinuationBox<T: Sendable>: @unchecked Sendable {
+package final class ContinuationBox<T: Sendable>: @unchecked Sendable {
     private nonisolated(unsafe) var continuation: CheckedContinuation<T, Error>?
     private let lock = NSLock()
 
-    init(_ continuation: CheckedContinuation<T, Error>) {
+    package init(_ continuation: CheckedContinuation<T, Error>) {
         self.continuation = continuation
     }
 
-    func resume(returning value: T) {
+    package func resume(returning value: T) {
         lock.lock()
         let cont = continuation
         continuation = nil
@@ -43,7 +43,7 @@ final class ContinuationBox<T: Sendable>: @unchecked Sendable {
         cont?.resume(returning: value)
     }
 
-    func resume(throwing error: Error) {
+    package func resume(throwing error: Error) {
         lock.lock()
         let cont = continuation
         continuation = nil
@@ -53,7 +53,7 @@ final class ContinuationBox<T: Sendable>: @unchecked Sendable {
 }
 
 /// Convenience extension for Void continuations
-extension ContinuationBox where T == Void {
+package extension ContinuationBox where T == Void {
     func resume() {
         resume(returning: ())
     }
@@ -62,15 +62,15 @@ extension ContinuationBox where T == Void {
 /// Thread-safe wrapper for non-throwing CheckedContinuation.
 ///
 /// Use this when a continuation will never fail (e.g., waiting for a state that always arrives).
-final class SafeContinuationBox<T: Sendable>: @unchecked Sendable {
+package final class SafeContinuationBox<T: Sendable>: @unchecked Sendable {
     private nonisolated(unsafe) var continuation: CheckedContinuation<T, Never>?
     private let lock = NSLock()
 
-    init(_ continuation: CheckedContinuation<T, Never>) {
+    package init(_ continuation: CheckedContinuation<T, Never>) {
         self.continuation = continuation
     }
 
-    func resume(returning value: T) {
+    package func resume(returning value: T) {
         lock.lock()
         let cont = continuation
         continuation = nil

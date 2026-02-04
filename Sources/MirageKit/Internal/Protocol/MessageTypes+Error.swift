@@ -11,12 +11,12 @@ import Foundation
 
 // MARK: - Error Messages
 
-struct ErrorMessage: Codable {
-    let code: ErrorCode
-    let message: String
-    let streamID: StreamID?
+package struct ErrorMessage: Codable {
+    package let code: ErrorCode
+    package let message: String
+    package let streamID: StreamID?
 
-    enum ErrorCode: String, Codable {
+    package enum ErrorCode: String, Codable {
         case unknown
         case invalidMessage
         case streamNotFound
@@ -26,5 +26,11 @@ struct ErrorMessage: Codable {
         case networkError
         case authRequired
         case permissionDenied
+    }
+
+    package init(code: ErrorCode, message: String, streamID: StreamID? = nil) {
+        self.code = code
+        self.message = message
+        self.streamID = streamID
     }
 }

@@ -32,52 +32,56 @@ AGENTS.md is the live reference for MirageKit. Include entries for new files, di
 MirageKit/
 ├─ Package.swift
 ├─ Sources/
-│  └─ MirageKit/
+│  ├─ MirageKit/ (shared)
+│  │  ├─ Public/
+│  │  │  ├─ CloudKit/
+│  │  │  ├─ Input/
+│  │  │  ├─ Shared/
+│  │  │  └─ Types/
+│  │  └─ Internal/
+│  │     ├─ Logging/
+│  │     ├─ Protocol/
+│  │     └─ Utilities/
+│  ├─ MirageKitClient/
+│  │  ├─ Public/
+│  │  │  ├─ Client/
+│  │  │  └─ Views/
+│  │  └─ Internal/
+│  │     ├─ Client/
+│  │     ├─ Decoding/
+│  │     ├─ Network/
+│  │     ├─ Rendering/
+│  │     └─ Utilities/
+│  └─ MirageKitHost/
 │     ├─ Public/
 │     │  ├─ Host/
-│     │  ├─ Client/
-│     │  ├─ Input/
-│     │  ├─ Types/
-│     │  ├─ Views/
 │     │  └─ Utilities/
-│     └─ Internal/
-│        ├─ Host/
-│        ├─ Capture/
-│        ├─ Encoding/
-│        ├─ Decoding/
-│        ├─ Network/
-│        ├─ Protocol/
-│        ├─ Rendering/
-│        ├─ Cursor/
-│        ├─ VirtualDisplay/
-│        └─ Utilities/
+│     ├─ Internal/
+│     │  ├─ Capture/
+│     │  ├─ Cursor/
+│     │  ├─ Encoding/
+│     │  ├─ Host/
+│     │  ├─ Network/
+│     │  ├─ Utilities/
+│     │  └─ VirtualDisplay/
+│     └─ Resources/
 └─ Tests/
+   ├─ MirageKitHostTests/
    └─ MirageKitTests/
 ```
 
-Docs: `Sources/MirageKit/Resources/If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
+Docs: `Sources/MirageKitHost/Resources/If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 
-## Public API (`Sources/MirageKit/Public/`)
-- Host services and delegates: `Host/`.
-- Host frame-rate helpers: `Host/MirageHostService+FrameRate.swift`.
-- Client services, delegates, session stores, metrics, cursor snapshots, cursor position snapshots: `Client/` (includes `MirageClientService+QualityTest.swift`).
-- Input event types: `Input/`.
-- Shared types and configuration (including `MirageDesktopStreamMode`, `MirageQualityTestPlan`, `MirageQualityTestSummary`): `Types/`.
-- Stream rendering views: `Views/` (Metal-backed stream view, input capture, and representables).
-- Software keyboard input helpers: `Views/InputCapturingView+SoftwareKeyboard.swift`.
-- Utilities: `Utilities/` (includes `MirageSupportResources` for bundled support docs).
+## Public API
+- Shared types, input events, trust, and CloudKit helpers: `Sources/MirageKit/Public/`.
+- Client services, delegates, session stores, metrics, cursor snapshots, and stream views: `Sources/MirageKitClient/Public/`.
+- Host services, delegates, window/input controllers, and host utilities: `Sources/MirageKitHost/Public/`.
+- Support resources (ColorSync cleanup): `Sources/MirageKitHost/Public/Utilities/MirageSupportResources.swift`.
 
-## Internal Implementation (`Sources/MirageKit/Internal/`)
-- Host: app enumeration, session state, menu bar capture, unlock handling, stream lifecycle, power assertions, packet buffer reuse for UDP sends.
-- Capture: capture orchestration, frame metadata, Metal copy, differential encoding.
-- Encoding/Decoding: HEVC encoder and decoder, frame reassembly buffer reuse.
-- Network: discovery and connectivity (Bonjour, TLS transport).
-- Protocol: wire format and serialization (quality test messages and UDP header).
-- VirtualDisplay: CGVirtualDisplay bridge and shared display coordination.
-- Rendering: Metal renderer.
-- Cursor: cursor position tracking.
-- Logging: unified logging and signposts.
-- Utilities: codec benchmark timing storage, bitrate-to-quality mapping, and helpers for automatic quality tests.
+## Internal Implementation
+- Shared protocol, logging, and support utilities: `Sources/MirageKit/Internal/`.
+- Client decode, render, and transport: `Sources/MirageKitClient/Internal/`.
+- Host capture, encode, virtual display, and host utilities: `Sources/MirageKitHost/Internal/`.
 
 ## Architecture Patterns
 - `MirageHostService` and `MirageClientService` are the main entry points.

@@ -34,14 +34,19 @@ Add MirageKit as a Swift Package Manager dependency.
 .package(url: "https://github.com/EthanLipnik/MirageKit.git", from: "0.0.1"),
 ```
 
-Then add `MirageKit` to the relevant target dependencies.
+MirageKit ships three products:
+- `MirageKit` (shared types, protocol, logging)
+- `MirageKitClient` (client services + stream views)
+- `MirageKitHost` (host services + capture/encode helpers)
+
+Add `MirageKitClient` or `MirageKitHost` to the relevant target dependencies.
 
 ## Quick Start
 
 ### Host (macOS)
 
 ```swift
-import MirageKit
+import MirageKitHost
 
 @MainActor
 final class HostController: MirageHostDelegate {
@@ -64,7 +69,7 @@ final class HostController: MirageHostDelegate {
 ### Client (iOS/macOS/visionOS)
 
 ```swift
-import MirageKit
+import MirageKitClient
 
 @MainActor
 final class ClientController: MirageClientDelegate {
@@ -87,7 +92,7 @@ final class ClientController: MirageClientDelegate {
 SwiftUI state updates per frame.
 
 ```swift
-import MirageKit
+import MirageKitClient
 import SwiftUI
 
 struct StreamView: View {
@@ -135,7 +140,7 @@ MirageStreamContentView(
 
 For a deeper dive into modules and data flows, see `Architecture.md`.
 
-For ColorSync cleanup guidance, see [If-Your-Computer-Feels-Stuttery.md](Sources/MirageKit/Resources/If-Your-Computer-Feels-Stuttery.md).
+For ColorSync cleanup guidance, see [If-Your-Computer-Feels-Stuttery.md](Sources/MirageKitHost/Resources/If-Your-Computer-Feels-Stuttery.md).
 
 ## Configuration
 

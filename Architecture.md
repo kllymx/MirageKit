@@ -9,6 +9,12 @@ MirageKit is split into host and client stacks:
 - **Host (macOS)** captures windows or virtual displays with ScreenCaptureKit, encodes frames with VideoToolbox, fragments packets for UDP transport, and publishes control messages over TCP.
 - **Client (macOS/iOS/visionOS)** discovers hosts over Bonjour, connects over TCP for control, receives UDP video packets, reassembles frames, decodes via VideoToolbox, and renders via Metal.
 
+Package products map to those stacks:
+
+- `MirageKit` (shared types, protocol, logging)
+- `MirageKitClient` (client services + rendering views)
+- `MirageKitHost` (host services + capture/encode helpers)
+
 ```mermaid
 flowchart LR
     Host[Host App] -->|Bonjour + TCP control| Client[Client App]

@@ -12,7 +12,12 @@ import Foundation
 
 // MARK: - Input Messages
 
-struct InputEventMessage: Codable {
-    let streamID: StreamID
-    let event: MirageInputEvent
+package struct InputEventMessage: Codable {
+    package let streamID: StreamID
+    package let event: MirageInputEvent
+
+    package init(streamID: StreamID, event: MirageInputEvent) {
+        self.streamID = streamID
+        self.event = event
+    }
 }

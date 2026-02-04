@@ -11,21 +11,40 @@ import Foundation
 
 // MARK: - Authentication Messages
 
-struct AuthRequestMessage: Codable {
-    let deviceID: UUID
-    let publicKey: Data
+package struct AuthRequestMessage: Codable {
+    package let deviceID: UUID
+    package let publicKey: Data
+
+    package init(deviceID: UUID, publicKey: Data) {
+        self.deviceID = deviceID
+        self.publicKey = publicKey
+    }
 }
 
-struct AuthChallengeMessage: Codable {
-    let challenge: Data
+package struct AuthChallengeMessage: Codable {
+    package let challenge: Data
+
+    package init(challenge: Data) {
+        self.challenge = challenge
+    }
 }
 
-struct AuthResponseMessage: Codable {
-    let signature: Data
+package struct AuthResponseMessage: Codable {
+    package let signature: Data
+
+    package init(signature: Data) {
+        self.signature = signature
+    }
 }
 
-struct AuthResultMessage: Codable {
-    let success: Bool
-    let trusted: Bool
-    let errorMessage: String?
+package struct AuthResultMessage: Codable {
+    package let success: Bool
+    package let trusted: Bool
+    package let errorMessage: String?
+
+    package init(success: Bool, trusted: Bool, errorMessage: String? = nil) {
+        self.success = success
+        self.trusted = trusted
+        self.errorMessage = errorMessage
+    }
 }

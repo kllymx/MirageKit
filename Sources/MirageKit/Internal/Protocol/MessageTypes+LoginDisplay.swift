@@ -14,26 +14,47 @@ import Foundation
 
 /// Sent when host starts streaming the login/lock screen to client
 /// Client should prepare to receive frames marked with .loginDisplay flag
-struct LoginDisplayReadyMessage: Codable {
+package struct LoginDisplayReadyMessage: Codable {
     /// Stream ID for the login display stream
-    let streamID: UInt32
+    package let streamID: UInt32
     /// Resolution of the login display
-    let width: Int
-    let height: Int
+    package let width: Int
+    package let height: Int
     /// Current session state (screenLocked, loginScreen, etc.)
-    let sessionState: HostSessionState
+    package let sessionState: HostSessionState
     /// Whether username is needed (true for loginScreen, false for screenLocked)
-    let requiresUsername: Bool
+    package let requiresUsername: Bool
     /// Dimension token for rejecting old-dimension P-frames after resize.
     /// Client should update its reassembler with this token.
-    var dimensionToken: UInt16?
+    package var dimensionToken: UInt16?
+
+    package init(
+        streamID: UInt32,
+        width: Int,
+        height: Int,
+        sessionState: HostSessionState,
+        requiresUsername: Bool,
+        dimensionToken: UInt16? = nil
+    ) {
+        self.streamID = streamID
+        self.width = width
+        self.height = height
+        self.sessionState = sessionState
+        self.requiresUsername = requiresUsername
+        self.dimensionToken = dimensionToken
+    }
 }
 
 /// Sent when login display stream stops (user logged in successfully)
 /// Client should transition to normal window selection mode
-struct LoginDisplayStoppedMessage: Codable {
+package struct LoginDisplayStoppedMessage: Codable {
     /// The stream ID that was stopped
-    let streamID: UInt32
+    package let streamID: UInt32
     /// New session state (should be .active)
-    let newState: HostSessionState
+    package let newState: HostSessionState
+
+    package init(streamID: UInt32, newState: HostSessionState) {
+        self.streamID = streamID
+        self.newState = newState
+    }
 }

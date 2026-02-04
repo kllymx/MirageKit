@@ -36,8 +36,8 @@ public struct MirageEncoderConfiguration: Sendable {
     public var bitrate: Int?
 
     /// Internal derived quality levels used by the encoder.
-    var frameQuality: Float
-    var keyframeQuality: Float
+    package var frameQuality: Float
+    package var keyframeQuality: Float
 
     public init(
         codec: MirageVideoCodec = .hevc,

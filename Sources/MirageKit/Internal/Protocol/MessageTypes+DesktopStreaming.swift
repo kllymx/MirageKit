@@ -14,34 +14,34 @@ import Foundation
 
 /// Request to start streaming the desktop (Client → Host)
 /// This can mirror all physical displays or run as a secondary display
-struct StartDesktopStreamMessage: Codable {
+package struct StartDesktopStreamMessage: Codable {
     /// Client's display scale factor
-    let scaleFactor: CGFloat?
+    package let scaleFactor: CGFloat?
     /// Client's display width in points (logical view bounds)
-    let displayWidth: Int
+    package let displayWidth: Int
     /// Client's display height in points (logical view bounds)
-    let displayHeight: Int
+    package let displayHeight: Int
     /// Client-requested keyframe interval in frames
-    var keyFrameInterval: Int?
+    package var keyFrameInterval: Int?
     /// Client-requested pixel format (capture + encode)
-    var pixelFormat: MiragePixelFormat?
+    package var pixelFormat: MiragePixelFormat?
     /// Client-requested color space
-    var colorSpace: MirageColorSpace?
+    package var colorSpace: MirageColorSpace?
     /// Client-requested ScreenCaptureKit queue depth
-    var captureQueueDepth: Int?
+    package var captureQueueDepth: Int?
     /// Desktop stream mode (mirrored vs secondary display)
-    var mode: MirageDesktopStreamMode?
+    package var mode: MirageDesktopStreamMode?
     /// Client-requested target bitrate (bits per second)
-    var bitrate: Int?
+    package var bitrate: Int?
     /// Client-requested stream scale (0.1-1.0)
-    let streamScale: CGFloat?
+    package let streamScale: CGFloat?
     /// Client latency preference for buffering behavior
-    let latencyMode: MirageStreamLatencyMode?
+    package let latencyMode: MirageStreamLatencyMode?
     /// UDP port the client is listening on for video data
-    let dataPort: UInt16?
+    package let dataPort: UInt16?
     /// Client refresh rate override in Hz (60/120 based on client capability)
     /// Used with P2P detection to enable 120fps streaming on capable displays
-    let maxRefreshRate: Int
+    package let maxRefreshRate: Int
     // TODO: HDR support - requires proper virtual display EDR configuration
     // /// Whether to stream in HDR (Rec. 2020 with PQ transfer function)
     // var preferHDR: Bool = false
@@ -61,38 +61,95 @@ struct StartDesktopStreamMessage: Codable {
         case dataPort
         case maxRefreshRate
     }
+
+    package init(
+        scaleFactor: CGFloat?,
+        displayWidth: Int,
+        displayHeight: Int,
+        keyFrameInterval: Int? = nil,
+        pixelFormat: MiragePixelFormat? = nil,
+        colorSpace: MirageColorSpace? = nil,
+        captureQueueDepth: Int? = nil,
+        mode: MirageDesktopStreamMode? = nil,
+        bitrate: Int? = nil,
+        streamScale: CGFloat? = nil,
+        latencyMode: MirageStreamLatencyMode? = nil,
+        dataPort: UInt16? = nil,
+        maxRefreshRate: Int
+    ) {
+        self.scaleFactor = scaleFactor
+        self.displayWidth = displayWidth
+        self.displayHeight = displayHeight
+        self.keyFrameInterval = keyFrameInterval
+        self.pixelFormat = pixelFormat
+        self.colorSpace = colorSpace
+        self.captureQueueDepth = captureQueueDepth
+        self.mode = mode
+        self.bitrate = bitrate
+        self.streamScale = streamScale
+        self.latencyMode = latencyMode
+        self.dataPort = dataPort
+        self.maxRefreshRate = maxRefreshRate
+    }
 }
 
 /// Request to stop the desktop stream (Client → Host)
-struct StopDesktopStreamMessage: Codable {
+package struct StopDesktopStreamMessage: Codable {
     /// The desktop stream ID to stop
-    let streamID: StreamID
+    package let streamID: StreamID
+
+    package init(streamID: StreamID) {
+        self.streamID = streamID
+    }
 }
 
 /// Confirmation that desktop streaming has started (Host → Client)
-struct DesktopStreamStartedMessage: Codable {
+package struct DesktopStreamStartedMessage: Codable {
     /// Stream ID for the desktop stream
-    let streamID: StreamID
+    package let streamID: StreamID
     /// Resolution of the virtual display
-    let width: Int
-    let height: Int
+    package let width: Int
+    package let height: Int
     /// Frame rate of the stream
-    let frameRate: Int
+    package let frameRate: Int
     /// Video codec being used
-    let codec: MirageVideoCodec
+    package let codec: MirageVideoCodec
     /// Number of physical displays being mirrored
-    let displayCount: Int
+    package let displayCount: Int
     /// Dimension token for rejecting old-dimension P-frames after resize.
     /// Client should update its reassembler with this token.
-    var dimensionToken: UInt16?
+    package var dimensionToken: UInt16?
+
+    package init(
+        streamID: StreamID,
+        width: Int,
+        height: Int,
+        frameRate: Int,
+        codec: MirageVideoCodec,
+        displayCount: Int,
+        dimensionToken: UInt16? = nil
+    ) {
+        self.streamID = streamID
+        self.width = width
+        self.height = height
+        self.frameRate = frameRate
+        self.codec = codec
+        self.displayCount = displayCount
+        self.dimensionToken = dimensionToken
+    }
 }
 
 /// Desktop stream stopped notification (Host → Client)
-struct DesktopStreamStoppedMessage: Codable {
+package struct DesktopStreamStoppedMessage: Codable {
     /// The stream ID that was stopped
-    let streamID: StreamID
+    package let streamID: StreamID
     /// Why the stream was stopped
-    let reason: DesktopStreamStopReason
+    package let reason: DesktopStreamStopReason
+
+    package init(streamID: StreamID, reason: DesktopStreamStopReason) {
+        self.streamID = streamID
+        self.reason = reason
+    }
 }
 
 /// Reasons why a desktop stream was stopped

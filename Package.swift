@@ -21,20 +21,37 @@ let package = Package(
             name: "MirageKit",
             targets: ["MirageKit"]
         ),
+        .library(
+            name: "MirageKitClient",
+            targets: ["MirageKitClient"]
+        ),
+        .library(
+            name: "MirageKitHost",
+            targets: ["MirageKitHost"]
+        ),
     ],
     targets: [
         .target(
-            name: "MirageKit",
+            name: "MirageKit"
+        ),
+        .target(
+            name: "MirageKitClient",
+            dependencies: ["MirageKit"]
+        ),
+        .target(
+            name: "MirageKitHost",
+            dependencies: ["MirageKit"],
             resources: [
                 .process("Resources"),
-            ],
-            swiftSettings: [
-                .define("MIRAGEKIT_HOST", .when(platforms: [.macOS])),
             ]
         ),
         .testTarget(
             name: "MirageKitTests",
             dependencies: ["MirageKit"]
+        ),
+        .testTarget(
+            name: "MirageKitHostTests",
+            dependencies: ["MirageKitHost"]
         ),
     ]
 )

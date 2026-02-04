@@ -45,53 +45,94 @@ public enum HostSessionState: String, Codable, Sendable {
 
 /// Session state update sent from host to client
 /// Sent immediately after connection and whenever state changes
-struct SessionStateUpdateMessage: Codable {
+package struct SessionStateUpdateMessage: Codable {
     /// Current session state
-    let state: HostSessionState
+    package let state: HostSessionState
     /// Session token for this state (prevents replay attacks)
-    let sessionToken: String
+    package let sessionToken: String
     /// Whether username is needed for unlock
-    let requiresUsername: Bool
+    package let requiresUsername: Bool
     /// Timestamp of this update
-    let timestamp: Date
+    package let timestamp: Date
+
+    package init(
+        state: HostSessionState,
+        sessionToken: String,
+        requiresUsername: Bool,
+        timestamp: Date
+    ) {
+        self.state = state
+        self.sessionToken = sessionToken
+        self.requiresUsername = requiresUsername
+        self.timestamp = timestamp
+    }
 }
 
 /// Unlock request sent from client to host
-struct UnlockRequestMessage: Codable {
+package struct UnlockRequestMessage: Codable {
     /// Session token from SessionStateUpdateMessage (must match current)
-    let sessionToken: String
+    package let sessionToken: String
     /// Username (required for loginScreen state, ignored otherwise)
-    let username: String?
+    package let username: String?
     /// Password for unlock
-    let password: String
+    package let password: String
+
+    package init(sessionToken: String, username: String?, password: String) {
+        self.sessionToken = sessionToken
+        self.username = username
+        self.password = password
+    }
 }
 
 /// Unlock response sent from host to client
-struct UnlockResponseMessage: Codable {
+package struct UnlockResponseMessage: Codable {
     /// Whether unlock was successful
-    let success: Bool
+    package let success: Bool
     /// New session state after attempt
-    let newState: HostSessionState
+    package let newState: HostSessionState
     /// New session token (if state changed)
-    let newSessionToken: String?
+    package let newSessionToken: String?
     /// Error details if failed
-    let error: UnlockError?
+    package let error: UnlockError?
     /// Whether client can retry with same token
-    let canRetry: Bool
+    package let canRetry: Bool
     /// Number of attempts remaining before lockout
-    let retriesRemaining: Int?
+    package let retriesRemaining: Int?
     /// Seconds to wait before next attempt (rate limiting)
-    let retryAfterSeconds: Int?
+    package let retryAfterSeconds: Int?
+
+    package init(
+        success: Bool,
+        newState: HostSessionState,
+        newSessionToken: String?,
+        error: UnlockError?,
+        canRetry: Bool,
+        retriesRemaining: Int?,
+        retryAfterSeconds: Int?
+    ) {
+        self.success = success
+        self.newState = newState
+        self.newSessionToken = newSessionToken
+        self.error = error
+        self.canRetry = canRetry
+        self.retriesRemaining = retriesRemaining
+        self.retryAfterSeconds = retryAfterSeconds
+    }
 }
 
 /// Unlock error details
-struct UnlockError: Codable {
-    let code: UnlockErrorCode
-    let message: String
+package struct UnlockError: Codable {
+    package let code: UnlockErrorCode
+    package let message: String
+
+    package init(code: UnlockErrorCode, message: String) {
+        self.code = code
+        self.message = message
+    }
 }
 
 /// Error codes for unlock failures
-enum UnlockErrorCode: String, Codable {
+package enum UnlockErrorCode: String, Codable {
     /// Wrong username or password
     case invalidCredentials
     /// Too many failed attempts

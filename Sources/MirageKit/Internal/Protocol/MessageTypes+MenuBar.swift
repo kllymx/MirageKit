@@ -13,15 +13,15 @@ import Foundation
 
 /// Menu bar structure update (Host → Client)
 /// Sent when the remote app's menu bar changes or on initial stream start
-struct MenuBarUpdateMessage: Codable {
+package struct MenuBarUpdateMessage: Codable {
     /// The stream this menu bar applies to
-    let streamID: StreamID
+    package let streamID: StreamID
     /// The menu bar structure, or nil if extraction failed/unavailable
-    let menuBar: MirageMenuBar?
+    package let menuBar: MirageMenuBar?
     /// Error message if extraction failed
-    let errorMessage: String?
+    package let errorMessage: String?
 
-    init(streamID: StreamID, menuBar: MirageMenuBar?, errorMessage: String? = nil) {
+    package init(streamID: StreamID, menuBar: MirageMenuBar?, errorMessage: String? = nil) {
         self.streamID = streamID
         self.menuBar = menuBar
         self.errorMessage = errorMessage
@@ -29,23 +29,28 @@ struct MenuBarUpdateMessage: Codable {
 }
 
 /// Request to execute a menu action (Client → Host)
-struct MenuActionRequestMessage: Codable {
+package struct MenuActionRequestMessage: Codable {
     /// The stream to execute the action on
-    let streamID: StreamID
+    package let streamID: StreamID
     /// Path to the menu item: [menuIndex, itemIndex, submenuItemIndex, ...]
-    let actionPath: [Int]
+    package let actionPath: [Int]
+
+    package init(streamID: StreamID, actionPath: [Int]) {
+        self.streamID = streamID
+        self.actionPath = actionPath
+    }
 }
 
 /// Result of menu action execution (Host → Client)
-struct MenuActionResultMessage: Codable {
+package struct MenuActionResultMessage: Codable {
     /// The stream the action was executed on
-    let streamID: StreamID
+    package let streamID: StreamID
     /// Whether the action was successful
-    let success: Bool
+    package let success: Bool
     /// Error message if failed
-    let errorMessage: String?
+    package let errorMessage: String?
 
-    init(streamID: StreamID, success: Bool, errorMessage: String? = nil) {
+    package init(streamID: StreamID, success: Bool, errorMessage: String? = nil) {
         self.streamID = streamID
         self.success = success
         self.errorMessage = errorMessage

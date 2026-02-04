@@ -11,16 +11,16 @@ import Foundation
 
 // MARK: - Connection Messages
 
-struct HelloMessage: Codable {
-    let deviceID: UUID
-    let deviceName: String
-    let deviceType: DeviceType
-    let protocolVersion: Int
-    let capabilities: MirageHostCapabilities
+package struct HelloMessage: Codable {
+    package let deviceID: UUID
+    package let deviceName: String
+    package let deviceType: DeviceType
+    package let protocolVersion: Int
+    package let capabilities: MirageHostCapabilities
     /// iCloud user record ID for trust evaluation, if available.
-    let iCloudUserID: String?
+    package let iCloudUserID: String?
 
-    init(
+    package init(
         deviceID: UUID,
         deviceName: String,
         deviceType: DeviceType,
@@ -37,23 +37,42 @@ struct HelloMessage: Codable {
     }
 }
 
-struct HelloResponseMessage: Codable {
-    let accepted: Bool
-    let hostID: UUID
-    let hostName: String
-    let requiresAuth: Bool
-    let dataPort: UInt16
+package struct HelloResponseMessage: Codable {
+    package let accepted: Bool
+    package let hostID: UUID
+    package let hostName: String
+    package let requiresAuth: Bool
+    package let dataPort: UInt16
+
+    package init(
+        accepted: Bool,
+        hostID: UUID,
+        hostName: String,
+        requiresAuth: Bool,
+        dataPort: UInt16
+    ) {
+        self.accepted = accepted
+        self.hostID = hostID
+        self.hostName = hostName
+        self.requiresAuth = requiresAuth
+        self.dataPort = dataPort
+    }
 }
 
-struct DisconnectMessage: Codable {
-    let reason: DisconnectReason
-    let message: String?
+package struct DisconnectMessage: Codable {
+    package let reason: DisconnectReason
+    package let message: String?
 
-    enum DisconnectReason: String, Codable {
+    package enum DisconnectReason: String, Codable {
         case userRequested
         case timeout
         case error
         case hostShutdown
         case authFailed
+    }
+
+    package init(reason: DisconnectReason, message: String? = nil) {
+        self.reason = reason
+        self.message = message
     }
 }

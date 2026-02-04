@@ -9,31 +9,49 @@
 
 import Foundation
 
-struct MirageCodecBenchmarkStore {
-    struct Record: Codable, Equatable {
-        let version: Int
-        let benchmarkWidth: Int
-        let benchmarkHeight: Int
-        let benchmarkFrameRate: Int
-        let hostEncodeMs: Double?
-        let clientDecodeMs: Double?
-        let measuredAt: Date
+package struct MirageCodecBenchmarkStore {
+    package struct Record: Codable, Equatable {
+        package let version: Int
+        package let benchmarkWidth: Int
+        package let benchmarkHeight: Int
+        package let benchmarkFrameRate: Int
+        package let hostEncodeMs: Double?
+        package let clientDecodeMs: Double?
+        package let measuredAt: Date
+
+        package init(
+            version: Int,
+            benchmarkWidth: Int,
+            benchmarkHeight: Int,
+            benchmarkFrameRate: Int,
+            hostEncodeMs: Double?,
+            clientDecodeMs: Double?,
+            measuredAt: Date
+        ) {
+            self.version = version
+            self.benchmarkWidth = benchmarkWidth
+            self.benchmarkHeight = benchmarkHeight
+            self.benchmarkFrameRate = benchmarkFrameRate
+            self.hostEncodeMs = hostEncodeMs
+            self.clientDecodeMs = clientDecodeMs
+            self.measuredAt = measuredAt
+        }
     }
 
-    static let currentVersion = 1
+    package static let currentVersion = 1
 
     private let fileURL: URL
 
-    init(filename: String = "MirageCodecBenchmark.json") {
+    package init(filename: String = "MirageCodecBenchmark.json") {
         fileURL = URL.cachesDirectory.appending(path: filename)
     }
 
-    func load() -> Record? {
+    package func load() -> Record? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         return try? JSONDecoder().decode(Record.self, from: data)
     }
 
-    func save(_ record: Record) {
+    package func save(_ record: Record) {
         guard let data = try? JSONEncoder().encode(record) else { return }
         do {
             try data.write(to: fileURL, options: .atomic)

@@ -9,7 +9,7 @@ import CoreGraphics
 import Foundation
 
 /// Control channel message types (sent over TCP)
-enum ControlMessageType: UInt8, Codable {
+package enum ControlMessageType: UInt8, Codable {
     // Connection management
     case hello = 0x01
     case helloResponse = 0x02
@@ -91,25 +91,25 @@ enum ControlMessageType: UInt8, Codable {
 }
 
 /// Base control message envelope
-struct ControlMessage: Codable {
-    let type: ControlMessageType
-    let payload: Data
+package struct ControlMessage: Codable {
+    package let type: ControlMessageType
+    package let payload: Data
 
-    init(type: ControlMessageType, payload: Data = Data()) {
+    package init(type: ControlMessageType, payload: Data = Data()) {
         self.type = type
         self.payload = payload
     }
 
-    init(type: ControlMessageType, content: some Encodable) throws {
+    package init(type: ControlMessageType, content: some Encodable) throws {
         self.type = type
         payload = try JSONEncoder().encode(content)
     }
 
-    func decode<T: Decodable>(_ type: T.Type) throws -> T {
+    package func decode<T: Decodable>(_ type: T.Type) throws -> T {
         try JSONDecoder().decode(type, from: payload)
     }
 
-    func serialize() -> Data {
+    package func serialize() -> Data {
         var data = Data()
         data.append(type.rawValue)
         withUnsafeBytes(of: UInt32(payload.count).littleEndian) { data.append(contentsOf: $0) }
@@ -117,7 +117,7 @@ struct ControlMessage: Codable {
         return data
     }
 
-    static func deserialize(from data: Data) -> (ControlMessage, Int)? {
+    package static func deserialize(from data: Data) -> (ControlMessage, Int)? {
         guard data.count >= 5 else { return nil }
 
         // Use index-relative access for Data that might be a slice

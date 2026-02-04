@@ -11,6 +11,10 @@ import Foundation
 
 // MARK: - Keyframe Messages
 
-struct KeyframeRequestMessage: Codable {
-    let streamID: StreamID
+package struct KeyframeRequestMessage: Codable {
+    package let streamID: StreamID
+
+    package init(streamID: StreamID) {
+        self.streamID = streamID
+    }
 }

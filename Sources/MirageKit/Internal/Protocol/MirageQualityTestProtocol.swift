@@ -9,18 +9,32 @@
 
 import Foundation
 
-let mirageQualityTestMagic: UInt32 = 0x4D49_5251 // "MIRQ"
-let mirageQualityTestVersion: UInt8 = 1
-let mirageQualityTestHeaderSize: Int = 37
+package let mirageQualityTestMagic: UInt32 = 0x4D49_5251 // "MIRQ"
+package let mirageQualityTestVersion: UInt8 = 1
+package let mirageQualityTestHeaderSize: Int = 37
 
-struct QualityTestPacketHeader {
-    let testID: UUID
-    let stageID: UInt16
-    let sequenceNumber: UInt32
-    let timestampNs: UInt64
-    let payloadLength: UInt16
+package struct QualityTestPacketHeader {
+    package let testID: UUID
+    package let stageID: UInt16
+    package let sequenceNumber: UInt32
+    package let timestampNs: UInt64
+    package let payloadLength: UInt16
 
-    func serialize() -> Data {
+    package init(
+        testID: UUID,
+        stageID: UInt16,
+        sequenceNumber: UInt32,
+        timestampNs: UInt64,
+        payloadLength: UInt16
+    ) {
+        self.testID = testID
+        self.stageID = stageID
+        self.sequenceNumber = sequenceNumber
+        self.timestampNs = timestampNs
+        self.payloadLength = payloadLength
+    }
+
+    package func serialize() -> Data {
         var data = Data(capacity: mirageQualityTestHeaderSize)
         withUnsafeBytes(of: mirageQualityTestMagic.littleEndian) { data.append(contentsOf: $0) }
         data.append(mirageQualityTestVersion)
@@ -32,7 +46,7 @@ struct QualityTestPacketHeader {
         return data
     }
 
-    static func deserialize(from data: Data) -> QualityTestPacketHeader? {
+    package static func deserialize(from data: Data) -> QualityTestPacketHeader? {
         guard data.count >= mirageQualityTestHeaderSize else { return nil }
         var offset = 0
 

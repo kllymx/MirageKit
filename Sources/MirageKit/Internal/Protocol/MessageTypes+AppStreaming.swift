@@ -12,45 +12,53 @@ import Foundation
 // MARK: - App-Centric Streaming Messages
 
 /// Request for list of installed apps (Client → Host)
-struct AppListRequestMessage: Codable {
+package struct AppListRequestMessage: Codable {
     /// Whether to include app icons in the response
-    let includeIcons: Bool
+    package let includeIcons: Bool
+
+    package init(includeIcons: Bool) {
+        self.includeIcons = includeIcons
+    }
 }
 
 /// List of installed apps available for streaming (Host → Client)
-struct AppListMessage: Codable {
+package struct AppListMessage: Codable {
     /// Available apps (filtered by host's allow/blocklist, excludes apps already streaming)
-    let apps: [MirageInstalledApp]
+    package let apps: [MirageInstalledApp]
+
+    package init(apps: [MirageInstalledApp]) {
+        self.apps = apps
+    }
 }
 
 /// Request to stream an app (Client → Host)
-struct SelectAppMessage: Codable {
+package struct SelectAppMessage: Codable {
     /// Bundle identifier of the app to stream
-    let bundleIdentifier: String
+    package let bundleIdentifier: String
     /// Client's data port for video
-    let dataPort: UInt16?
+    package let dataPort: UInt16?
     /// Client's display scale factor
-    let scaleFactor: CGFloat?
+    package let scaleFactor: CGFloat?
     /// Client's display dimensions
-    let displayWidth: Int?
-    let displayHeight: Int?
+    package let displayWidth: Int?
+    package let displayHeight: Int?
     /// Client refresh rate override in Hz (60/120 based on client capability)
     /// Used with P2P detection to enable 120fps streaming on capable displays
-    let maxRefreshRate: Int
+    package let maxRefreshRate: Int
     /// Client-requested keyframe interval in frames
-    var keyFrameInterval: Int?
+    package var keyFrameInterval: Int?
     /// Client-requested pixel format (capture + encode)
-    var pixelFormat: MiragePixelFormat?
+    package var pixelFormat: MiragePixelFormat?
     /// Client-requested color space
-    var colorSpace: MirageColorSpace?
+    package var colorSpace: MirageColorSpace?
     /// Client-requested ScreenCaptureKit queue depth
-    var captureQueueDepth: Int?
+    package var captureQueueDepth: Int?
     /// Client-requested target bitrate (bits per second)
-    var bitrate: Int?
+    package var bitrate: Int?
     /// Client-requested stream scale (0.1-1.0)
-    let streamScale: CGFloat?
+    package let streamScale: CGFloat?
     /// Client latency preference for buffering behavior
-    let latencyMode: MirageStreamLatencyMode?
+    package let latencyMode: MirageStreamLatencyMode?
     // TODO: HDR support - requires proper virtual display EDR configuration
     // /// Whether to stream in HDR (Rec. 2020 with PQ transfer function)
     // var preferHDR: Bool = false
@@ -70,6 +78,36 @@ struct SelectAppMessage: Codable {
         case streamScale
         case latencyMode
     }
+
+    package init(
+        bundleIdentifier: String,
+        dataPort: UInt16? = nil,
+        scaleFactor: CGFloat? = nil,
+        displayWidth: Int? = nil,
+        displayHeight: Int? = nil,
+        maxRefreshRate: Int,
+        keyFrameInterval: Int? = nil,
+        pixelFormat: MiragePixelFormat? = nil,
+        colorSpace: MirageColorSpace? = nil,
+        captureQueueDepth: Int? = nil,
+        bitrate: Int? = nil,
+        streamScale: CGFloat? = nil,
+        latencyMode: MirageStreamLatencyMode? = nil
+    ) {
+        self.bundleIdentifier = bundleIdentifier
+        self.dataPort = dataPort
+        self.scaleFactor = scaleFactor
+        self.displayWidth = displayWidth
+        self.displayHeight = displayHeight
+        self.maxRefreshRate = maxRefreshRate
+        self.keyFrameInterval = keyFrameInterval
+        self.pixelFormat = pixelFormat
+        self.colorSpace = colorSpace
+        self.captureQueueDepth = captureQueueDepth
+        self.bitrate = bitrate
+        self.streamScale = streamScale
+        self.latencyMode = latencyMode
+    }
 }
 
 /// Confirmation that app streaming has started (Host → Client)
@@ -88,6 +126,28 @@ public struct AppStreamStartedMessage: Codable {
         public let width: Int
         public let height: Int
         public let isResizable: Bool
+
+        package init(
+            streamID: StreamID,
+            windowID: WindowID,
+            title: String?,
+            width: Int,
+            height: Int,
+            isResizable: Bool
+        ) {
+            self.streamID = streamID
+            self.windowID = windowID
+            self.title = title
+            self.width = width
+            self.height = height
+            self.isResizable = isResizable
+        }
+    }
+
+    package init(bundleIdentifier: String, appName: String, windows: [AppStreamWindow]) {
+        self.bundleIdentifier = bundleIdentifier
+        self.appName = appName
+        self.windows = windows
     }
 }
 
@@ -102,24 +162,48 @@ public struct WindowAddedToStreamMessage: Codable {
     public let width: Int
     public let height: Int
     public let isResizable: Bool
+
+    package init(
+        bundleIdentifier: String,
+        streamID: StreamID,
+        windowID: WindowID,
+        title: String?,
+        width: Int,
+        height: Int,
+        isResizable: Bool
+    ) {
+        self.bundleIdentifier = bundleIdentifier
+        self.streamID = streamID
+        self.windowID = windowID
+        self.title = title
+        self.width = width
+        self.height = height
+        self.isResizable = isResizable
+    }
 }
 
 /// Window removed from app stream (Host → Client)
-struct WindowRemovedFromStreamMessage: Codable {
+package struct WindowRemovedFromStreamMessage: Codable {
     /// Bundle identifier of the app
-    let bundleIdentifier: String
+    package let bundleIdentifier: String
     /// The window that was removed
-    let windowID: WindowID
+    package let windowID: WindowID
     /// Why it was removed
-    let reason: RemovalReason
+    package let reason: RemovalReason
 
-    enum RemovalReason: String, Codable {
+    package enum RemovalReason: String, Codable {
         /// Host closed the window
         case hostClosed
         /// Client requested close
         case clientClosed
         /// Window became invisible
         case windowHidden
+    }
+
+    package init(bundleIdentifier: String, windowID: WindowID, reason: RemovalReason) {
+        self.bundleIdentifier = bundleIdentifier
+        self.windowID = windowID
+        self.reason = reason
     }
 }
 
@@ -132,6 +216,12 @@ public struct WindowCooldownStartedMessage: Codable {
     public let durationSeconds: Int
     /// Human-readable message
     public let message: String
+
+    package init(windowID: WindowID, durationSeconds: Int, message: String) {
+        self.windowID = windowID
+        self.durationSeconds = durationSeconds
+        self.message = message
+    }
 }
 
 /// Window cooldown cancelled (Host → Client)
@@ -146,6 +236,24 @@ public struct WindowCooldownCancelledMessage: Codable {
     public let width: Int
     public let height: Int
     public let isResizable: Bool
+
+    package init(
+        oldWindowID: WindowID,
+        newStreamID: StreamID,
+        newWindowID: WindowID,
+        title: String?,
+        width: Int,
+        height: Int,
+        isResizable: Bool
+    ) {
+        self.oldWindowID = oldWindowID
+        self.newStreamID = newStreamID
+        self.newWindowID = newWindowID
+        self.title = title
+        self.width = width
+        self.height = height
+        self.isResizable = isResizable
+    }
 }
 
 /// Return to app selection (Host → Client)
@@ -157,40 +265,67 @@ public struct ReturnToAppSelectionMessage: Codable {
     public let bundleIdentifier: String
     /// Human-readable message
     public let message: String
+
+    package init(windowID: WindowID, bundleIdentifier: String, message: String) {
+        self.windowID = windowID
+        self.bundleIdentifier = bundleIdentifier
+        self.message = message
+    }
 }
 
 /// Request to close a window on the host (Client → Host)
-struct CloseWindowRequestMessage: Codable {
+package struct CloseWindowRequestMessage: Codable {
     /// The window to close
-    let windowID: WindowID
+    package let windowID: WindowID
+
+    package init(windowID: WindowID) {
+        self.windowID = windowID
+    }
 }
 
 /// Stream paused notification (Client → Host)
 /// Sent when client window loses focus (e.g., Stage Manager)
-struct StreamPausedMessage: Codable {
+package struct StreamPausedMessage: Codable {
     /// The stream to pause
-    let streamID: StreamID
+    package let streamID: StreamID
+
+    package init(streamID: StreamID) {
+        self.streamID = streamID
+    }
 }
 
 /// Stream resumed notification (Client → Host)
 /// Sent when client window regains focus
-struct StreamResumedMessage: Codable {
+package struct StreamResumedMessage: Codable {
     /// The stream to resume
-    let streamID: StreamID
+    package let streamID: StreamID
+
+    package init(streamID: StreamID) {
+        self.streamID = streamID
+    }
 }
 
 /// Cancel cooldown and close immediately (Client → Host)
-struct CancelCooldownMessage: Codable {
+package struct CancelCooldownMessage: Codable {
     /// The window to close (was in cooldown)
-    let windowID: WindowID
+    package let windowID: WindowID
+
+    package init(windowID: WindowID) {
+        self.windowID = windowID
+    }
 }
 
 /// Window resizability changed (Host → Client)
-struct WindowResizabilityChangedMessage: Codable {
+package struct WindowResizabilityChangedMessage: Codable {
     /// The window whose resizability changed
-    let windowID: WindowID
+    package let windowID: WindowID
     /// New resizability state
-    let isResizable: Bool
+    package let isResizable: Bool
+
+    package init(windowID: WindowID, isResizable: Bool) {
+        self.windowID = windowID
+        self.isResizable = isResizable
+    }
 }
 
 /// App terminated notification (Host → Client)
@@ -202,4 +337,10 @@ public struct AppTerminatedMessage: Codable {
     public let closedWindowIDs: [WindowID]
     /// Whether there are any remaining windows on this client
     public let hasRemainingWindows: Bool
+
+    package init(bundleIdentifier: String, closedWindowIDs: [WindowID], hasRemainingWindows: Bool) {
+        self.bundleIdentifier = bundleIdentifier
+        self.closedWindowIDs = closedWindowIDs
+        self.hasRemainingWindows = hasRemainingWindows
+    }
 }
