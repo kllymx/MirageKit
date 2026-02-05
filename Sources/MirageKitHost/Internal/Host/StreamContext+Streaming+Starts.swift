@@ -299,6 +299,7 @@ extension StreamContext {
     func startDesktopDisplay(
         displayWrapper: SCDisplayWrapper,
         resolution: CGSize? = nil,
+        excludedWindows: [SCWindowWrapper] = [],
         onEncodedFrame: @escaping @Sendable (Data, FrameHeader, @escaping @Sendable () -> Void) -> Void
     )
     async throws {
@@ -421,10 +422,12 @@ extension StreamContext {
             return self?.backpressureActiveSnapshot ?? false
         }
 
+        let resolvedExcludedWindows = excludedWindows.map(\.window)
         let captureSizeForSCK = CGVirtualDisplayBridge.isMirageDisplay(display.displayID) ? outputSize : nil
         try await captureEngine.startDisplayCapture(
             display: display,
             resolution: captureSizeForSCK,
+            excludedWindows: resolvedExcludedWindows,
             showsCursor: false
         ) { [weak self] frame in
             self?.enqueueCapturedFrame(frame)

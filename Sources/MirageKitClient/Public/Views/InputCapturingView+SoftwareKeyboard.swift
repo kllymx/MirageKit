@@ -291,7 +291,12 @@ final class SoftwareKeyboardAccessoryView: UIView {
             #if os(visionOS)
             var configuration = UIButton.Configuration.bordered()
             #else
-            var configuration = UIButton.Configuration.glass()
+            var configuration: UIButton.Configuration
+            if #available(iOS 26.0, *) {
+                configuration = .glass()
+            } else {
+                configuration = .bordered()
+            }
             #endif
             configuration.title = key.title
             configuration.cornerStyle = .capsule
@@ -327,7 +332,12 @@ final class SoftwareKeyboardAccessoryView: UIView {
         #if os(visionOS)
         var configuration = isSelected ? UIButton.Configuration.borderedProminent() : UIButton.Configuration.bordered()
         #else
-        var configuration = isSelected ? UIButton.Configuration.prominentGlass() : UIButton.Configuration.glass()
+        var configuration: UIButton.Configuration
+        if #available(iOS 26.0, *) {
+            configuration = isSelected ? .prominentGlass() : .glass()
+        } else {
+            configuration = isSelected ? .borderedProminent() : .bordered()
+        }
         #endif
         configuration.title = button.configuration?.title ?? button.titleLabel?.text
         configuration.cornerStyle = .capsule

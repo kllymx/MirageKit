@@ -18,6 +18,8 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - `MIRAGE_SIGNPOST=1` enables Instruments signposts for decode/render timing.
 - Automatic quality tests use staged UDP payloads (warmup + ramp until plateau) plus VideoToolbox benchmarks for encode/decode timing; quality probes use a SwiftUI animated probe scene and a transport probe that sends real encoded frames over UDP.
 - MirageKit targets the latest supported OS releases; availability checks are not used in MirageKit code.
+- Lights Out mode: host-side blackout overlay + input block for app streaming and mirrored desktop streaming; overlay windows are excluded from display capture.
+- Client startup retries stream registration until the first UDP packet arrives.
 
 ## Interaction Guidelines
 - Planning phase: detailed step list; explicit plan.
@@ -83,6 +85,8 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 - Shared protocol, logging, and support utilities: `Sources/MirageKit/Internal/`.
 - Client decode, render, and transport: `Sources/MirageKitClient/Internal/`.
 - Host capture, encode, virtual display, and host utilities: `Sources/MirageKitHost/Internal/`.
+- Host Lights Out support: `Sources/MirageKitHost/Internal/Host/HostLightsOutController.swift`, `Sources/MirageKitHost/Internal/Host/MirageInjectedEventTag.swift`.
+- Host Lights Out integration: `Sources/MirageKitHost/Public/Host/MirageHostService+LightsOut.swift`.
 
 **Other Modules:**
 - `Sources/MirageKitHost/Internal/Utilities/MirageQualityProbeScene.swift` - SwiftUI animated probe scene for automatic quality testing

@@ -254,6 +254,8 @@ public extension MirageHostService {
         // Start menu bar monitoring for this stream
         if let app = updatedWindow.application { await startMenuBarMonitoring(streamID: streamID, app: app, client: client) }
 
+        await updateLightsOutState()
+
         return session
     }
 
@@ -329,6 +331,8 @@ public extension MirageHostService {
 
         // Minimize the window if requested (after stopping capture so window is restored from virtual display)
         if minimizeWindow { WindowManager.minimizeWindow(windowID) }
+
+        await updateLightsOutState()
 
         if activeStreams.isEmpty {
             // Stop activity monitor when no more streams are active

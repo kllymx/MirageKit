@@ -38,7 +38,8 @@ extension WindowCaptureEngine {
                 knownScaleFactor: config.knownScaleFactor,
                 outputScale: scale,
                 resolution: config.resolution,
-                showsCursor: config.showsCursor
+                showsCursor: config.showsCursor,
+                excludedWindows: config.excludedWindows
             )
         }
 
@@ -107,7 +108,8 @@ extension WindowCaptureEngine {
                 knownScaleFactor: config.knownScaleFactor,
                 outputScale: config.outputScale,
                 resolution: CGSize(width: width, height: height),
-                showsCursor: config.showsCursor
+                showsCursor: config.showsCursor,
+                excludedWindows: config.excludedWindows
             )
         }
 
@@ -145,6 +147,7 @@ extension WindowCaptureEngine {
         currentWidth = newWidth
         currentHeight = newHeight
         useBestCaptureResolution = false
+        var excludedWindows: [SCWindow] = []
         if let config = captureSessionConfig {
             captureSessionConfig = CaptureSessionConfiguration(
                 windowID: config.windowID,
@@ -156,12 +159,14 @@ extension WindowCaptureEngine {
                 knownScaleFactor: config.knownScaleFactor,
                 outputScale: config.outputScale,
                 resolution: resolution,
-                showsCursor: config.showsCursor
+                showsCursor: config.showsCursor,
+                excludedWindows: config.excludedWindows
             )
+            excludedWindows = config.excludedWindows
         }
 
         // Create new filter for the new display
-        let newFilter = SCContentFilter(display: newDisplay, excludingWindows: [])
+        let newFilter = SCContentFilter(display: newDisplay, excludingWindows: excludedWindows)
         contentFilter = newFilter
 
         // Create configuration for the new display
@@ -192,6 +197,37 @@ extension WindowCaptureEngine {
         )
 
         MirageLogger.capture("Capture switched to display \(newDisplay.displayID) at \(newWidth)x\(newHeight)")
+    }
+
+    func updateExcludedWindows(_ windows: [SCWindow]) async throws {
+        guard isCapturing, let stream, captureMode == .display else { return }
+
+        let newIDs = Set(windows.map(\.windowID))
+        let currentIDs = Set(excludedWindows.map(\.windowID))
+        guard newIDs != currentIDs else { return }
+
+        excludedWindows = windows
+        if let config = captureSessionConfig {
+            captureSessionConfig = CaptureSessionConfiguration(
+                windowID: config.windowID,
+                applicationPID: config.applicationPID,
+                displayID: config.displayID,
+                window: config.window,
+                application: config.application,
+                display: config.display,
+                knownScaleFactor: config.knownScaleFactor,
+                outputScale: config.outputScale,
+                resolution: config.resolution,
+                showsCursor: config.showsCursor,
+                excludedWindows: windows
+            )
+        }
+
+        guard let display = captureSessionConfig?.display else { return }
+        let newFilter = SCContentFilter(display: display, excludingWindows: windows)
+        contentFilter = newFilter
+        try await stream.updateContentFilter(newFilter)
+        MirageLogger.capture("Updated display capture exclusions (\(windows.count) windows)")
     }
 
     func updateFrameRate(_ fps: Int) async throws {

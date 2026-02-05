@@ -174,6 +174,23 @@ public final class MirageHostService {
     /// Window activation (robust multi-method for headless Macs)
     @ObservationIgnored let windowActivator: WindowActivator = .forCurrentEnvironment()
 
+    /// Lights Out (curtain) mode for host privacy during streaming.
+    public var lightsOutEnabled: Bool = false {
+        didSet {
+            Task { @MainActor [weak self] in
+                await self?.updateLightsOutState()
+            }
+        }
+    }
+
+    /// Whether to lock the host when the last client disconnects.
+    public var lockHostOnDisconnect: Bool = false
+
+    /// Optional override for host lock behavior (defaults to CGSession if nil).
+    public var lockHostHandler: (@MainActor () -> Void)?
+
+    @ObservationIgnored let lightsOutController = HostLightsOutController()
+
     // MARK: - Fast Input Path (bypasses MainActor)
 
     /// High-priority queue for input processing - bypasses MainActor for lowest latency
@@ -241,6 +258,12 @@ public final class MirageHostService {
 
         onResizeWindowForStream = { [weak windowController] window, size in
             windowController?.resizeAndCenterWindowForStream(window, targetSize: size)
+        }
+
+        lightsOutController.onOverlayWindowsChanged = { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.refreshLightsOutCaptureExclusions()
+            }
         }
     }
 

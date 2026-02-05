@@ -137,7 +137,7 @@ extension MirageHostService {
 
         cgEvent.setIntegerValueField(.mouseEventClickState, value: Int64(event.clickCount))
         cgEvent.flags = event.modifiers.cgEventFlags
-        cgEvent.post(tap: .cghidEventTap)
+        MirageInjectedEventTag.postHID(cgEvent)
     }
 
     /// Post a HID scroll event
@@ -155,7 +155,7 @@ extension MirageHostService {
 
         cgEvent.location = location
         cgEvent.flags = event.modifiers.cgEventFlags
-        cgEvent.post(tap: .cghidEventTap)
+        MirageInjectedEventTag.postHID(cgEvent)
     }
 
     /// Post a HID keyboard event
@@ -169,7 +169,7 @@ extension MirageHostService {
         }
 
         cgEvent.flags = event.modifiers.cgEventFlags
-        cgEvent.post(tap: .cghidEventTap)
+        MirageInjectedEventTag.postHID(cgEvent)
     }
 
     /// Post a HID flags changed event (modifier keys)
@@ -184,7 +184,7 @@ extension MirageHostService {
 
         cgEvent.type = .flagsChanged
         cgEvent.flags = modifiers.cgEventFlags
-        cgEvent.post(tap: .cghidEventTap)
+        MirageInjectedEventTag.postHID(cgEvent)
     }
 
     /// Click to focus the login field before keyboard input.
@@ -201,7 +201,7 @@ extension MirageHostService {
         ) else {
             return
         }
-        downEvent.post(tap: .cghidEventTap)
+        MirageInjectedEventTag.postHID(downEvent)
 
         guard let upEvent = CGEvent(
             mouseEventSource: nil,
@@ -211,7 +211,7 @@ extension MirageHostService {
         ) else {
             return
         }
-        upEvent.post(tap: .cghidEventTap)
+        MirageInjectedEventTag.postHID(upEvent)
     }
 }
 

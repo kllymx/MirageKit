@@ -41,7 +41,7 @@ public struct MirageStreamContentView: View {
     @State private var displayResolutionTask: Task<Void, Never>?
     @State private var lastSentDisplayResolution: CGSize = .zero
     @State private var streamScaleTask: Task<Void, Never>?
-    @State private var lastSentStreamScale: CGFloat = 0
+    @State private var lastSentEncodedPixelSize: CGSize = .zero
 
     @State private var scrollInputSampler = ScrollInputSampler()
     @State private var pointerInputSampler = PointerInputSampler()
@@ -326,20 +326,32 @@ public struct MirageStreamContentView: View {
             return
         }
 
-        let virtualDisplayScaleFactor: CGFloat = 2.0
-        let virtualPixelSize = CGSize(
-            width: viewSize.width * virtualDisplayScaleFactor,
-            height: viewSize.height * virtualDisplayScaleFactor
-        )
-        let widthScale = maxDrawableSize.width / virtualPixelSize.width
-        let heightScale = maxDrawableSize.height / virtualPixelSize.height
-        let clampedScale = max(0.1, min(1.0, widthScale, heightScale))
-        let quantizedScale = clientService.quantizedStreamScale(clampedScale)
+        let basePoints = clientService.scaledDisplayResolution(viewSize)
+        guard basePoints.width > 0, basePoints.height > 0 else { return }
 
-        guard abs(quantizedScale - lastSentStreamScale) > 0.001 else { return }
+        let virtualDisplayScaleFactor: CGFloat = 2.0
+        let basePixels = CGSize(
+            width: basePoints.width * virtualDisplayScaleFactor,
+            height: basePoints.height * virtualDisplayScaleFactor
+        )
+        let widthScale = maxDrawableSize.width / basePixels.width
+        let heightScale = maxDrawableSize.height / basePixels.height
+        let clampedScale = clientService.clampStreamScale(min(1.0, widthScale, heightScale))
+
+        let rawTargetSize = CGSize(
+            width: basePixels.width * clampedScale,
+            height: basePixels.height * clampedScale
+        )
+        let alignedTargetSize = CGSize(
+            width: min(maxDrawableSize.width, alignedEven(rawTargetSize.width)),
+            height: min(maxDrawableSize.height, alignedEven(rawTargetSize.height))
+        )
+
+        guard alignedTargetSize != lastSentEncodedPixelSize else { return }
 
         streamScaleTask?.cancel()
-        let targetScale = quantizedScale
+        let targetScale = clampedScale
+        let targetSize = alignedTargetSize
         streamScaleTask = Task { @MainActor in
             do {
                 try await Task.sleep(for: .milliseconds(200))
@@ -347,13 +359,19 @@ public struct MirageStreamContentView: View {
                 return
             }
 
-            guard abs(targetScale - lastSentStreamScale) > 0.001 else { return }
-            lastSentStreamScale = targetScale
+            guard targetSize != lastSentEncodedPixelSize else { return }
+            lastSentEncodedPixelSize = targetSize
             try? await clientService.sendStreamScaleChange(
                 streamID: session.streamID,
                 scale: targetScale
             )
         }
+    }
+
+    private func alignedEven(_ value: CGFloat) -> CGFloat {
+        let rounded = CGFloat(Int(value.rounded()))
+        let even = rounded - CGFloat(Int(rounded) % 2)
+        return max(2, even)
     }
 
     #if os(iOS) || os(visionOS)

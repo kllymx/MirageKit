@@ -200,6 +200,9 @@ extension MirageHostService {
         desktopStreamClientContext = clientContext
         streamsByID[streamID] = streamContext
 
+        await updateLightsOutState()
+        let excludedWindows = await resolveLightsOutExcludedWindows()
+
         await suspendAppListRequestsForDesktopStream()
 
         // Register for input handling.
@@ -227,6 +230,7 @@ extension MirageHostService {
         try await streamContext.startDesktopDisplay(
             displayWrapper: captureDisplay,
             resolution: captureResolution,
+            excludedWindows: excludedWindows,
             onEncodedFrame: { [weak self] packetData, _, releasePacket in
                 guard let self else {
                     releasePacket()
@@ -335,6 +339,8 @@ extension MirageHostService {
         if activeStreams.isEmpty, loginDisplayContext == nil { await PowerAssertionManager.shared.disable() }
 
         resumePendingAppListRequestIfNeeded()
+
+        await updateLightsOutState()
 
         MirageLogger.host("Desktop stream stopped")
     }

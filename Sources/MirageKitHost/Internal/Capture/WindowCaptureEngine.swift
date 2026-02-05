@@ -41,6 +41,7 @@ actor WindowCaptureEngine {
     var useBestCaptureResolution: Bool = true
     var useExplicitCaptureDimensions: Bool = true
     var contentFilter: SCContentFilter?
+    var excludedWindows: [SCWindow] = []
     var lastRestartTime: CFAbsoluteTime = 0
     let restartCooldown: CFAbsoluteTime = 3.0
 
@@ -72,6 +73,7 @@ actor WindowCaptureEngine {
         let outputScale: CGFloat
         let resolution: CGSize?
         let showsCursor: Bool
+        let excludedWindows: [SCWindow]
     }
 
     func setAdmissionDropper(_ dropper: (@Sendable () -> Bool)?) {

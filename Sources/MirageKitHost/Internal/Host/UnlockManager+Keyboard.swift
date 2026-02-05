@@ -38,7 +38,7 @@ extension UnlockManager {
             mouseCursorPosition: point,
             mouseButton: .left
         ) {
-            down.post(tap: .cghidEventTap)
+            MirageInjectedEventTag.postHID(down)
         }
         if let up = CGEvent(
             mouseEventSource: nil,
@@ -46,7 +46,7 @@ extension UnlockManager {
             mouseCursorPosition: point,
             mouseButton: .left
         ) {
-            up.post(tap: .cghidEventTap)
+            MirageInjectedEventTag.postHID(up)
         }
     }
 
@@ -67,15 +67,23 @@ extension UnlockManager {
 
     func postKeyEvent(keyCode: UInt16, shift: Bool) {
         if shift {
-            if let shiftDown = CGEvent(keyboardEventSource: nil, virtualKey: UInt16(kVK_Shift), keyDown: true) { shiftDown.post(tap: .cghidEventTap) }
+            if let shiftDown = CGEvent(keyboardEventSource: nil, virtualKey: UInt16(kVK_Shift), keyDown: true) {
+                MirageInjectedEventTag.postHID(shiftDown)
+            }
         }
 
-        if let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) { keyDown.post(tap: .cghidEventTap) }
+        if let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) {
+            MirageInjectedEventTag.postHID(keyDown)
+        }
 
-        if let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) { keyUp.post(tap: .cghidEventTap) }
+        if let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) {
+            MirageInjectedEventTag.postHID(keyUp)
+        }
 
         if shift {
-            if let shiftUp = CGEvent(keyboardEventSource: nil, virtualKey: UInt16(kVK_Shift), keyDown: false) { shiftUp.post(tap: .cghidEventTap) }
+            if let shiftUp = CGEvent(keyboardEventSource: nil, virtualKey: UInt16(kVK_Shift), keyDown: false) {
+                MirageInjectedEventTag.postHID(shiftUp)
+            }
         }
     }
 

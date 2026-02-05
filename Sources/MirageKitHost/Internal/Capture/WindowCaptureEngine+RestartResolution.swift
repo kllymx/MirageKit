@@ -71,7 +71,8 @@ extension WindowCaptureEngine {
                     knownScaleFactor: config.knownScaleFactor,
                     outputScale: config.outputScale,
                     resolution: config.resolution,
-                    showsCursor: config.showsCursor
+                    showsCursor: config.showsCursor,
+                    excludedWindows: config.excludedWindows
                 )
 
                 if hasResolvedDisplay, hasResolvedWindowTargets {

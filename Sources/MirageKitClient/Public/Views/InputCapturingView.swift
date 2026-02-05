@@ -129,16 +129,8 @@ public class InputCapturingView: UIView {
     private(set) var hardwareKeyboardPresent: Bool = false
 
     // Virtual cursor state (direct touch trackpad mode)
-    #if os(iOS)
-    private let virtualCursorView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-    #else
-    private let virtualCursorView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
-    #endif
-    #if os(iOS)
-    private let lockedCursorView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-    #else
-    private let lockedCursorView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
-    #endif
+    private let virtualCursorView = InputCapturingView.makeCursorEffectView()
+    private let lockedCursorView = InputCapturingView.makeCursorEffectView()
     var virtualCursorPosition: CGPoint = .init(x: 0.5, y: 0.5)
     private let virtualCursorSize: CGFloat = 14
     var virtualCursorVelocity: CGPoint = .zero
@@ -165,6 +157,15 @@ public class InputCapturingView: UIView {
     var touchScrollDecelerationVelocity: CGPoint = .zero
     var touchScrollDecelerationLink: CADisplayLink?
     var touchScrollDecelerationLocation: CGPoint = .zero
+
+    private static func makeCursorEffectView() -> UIVisualEffectView {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            return UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        }
+        #endif
+        return UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    }
 
     /// Software keyboard state
     public var softwareKeyboardVisible: Bool = false {

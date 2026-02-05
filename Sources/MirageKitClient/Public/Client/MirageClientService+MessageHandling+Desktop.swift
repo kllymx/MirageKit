@@ -56,9 +56,12 @@ extension MirageClientService {
                         if self.udpConnection == nil { try await self.startVideoConnection() }
                         try await self.sendStreamRegistration(streamID: streamID)
                         MirageLogger.client("Registered for desktop stream video \(streamID)")
+                        self.startStartupRegistrationRetry(streamID: streamID)
                     } catch {
                         MirageLogger.error(.client, "Failed to establish video connection for desktop stream: \(error)")
                         self.registeredStreamIDs.remove(streamID)
+                        self.clearStartupPacketPending(streamID)
+                        self.cancelStartupRegistrationRetry(streamID: streamID)
                     }
                 }
             }
@@ -97,6 +100,7 @@ extension MirageClientService {
             streamStartupFirstRegistrationSent.remove(streamID)
             streamStartupFirstPacketReceived.remove(streamID)
             clearStartupPacketPending(streamID)
+            cancelStartupRegistrationRetry(streamID: streamID)
 
             Task {
                 if let controller = self.controllersByStream[streamID] {

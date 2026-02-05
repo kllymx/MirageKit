@@ -12,8 +12,8 @@ import PackageDescription
 let package = Package(
     name: "MirageKit",
     platforms: [
-        .macOS(.v26),
-        .iOS(.v26),
+        .macOS(.v14),
+        .iOS("17.4"),
         .visionOS(.v26),
     ],
     products: [

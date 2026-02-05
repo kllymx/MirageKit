@@ -197,6 +197,13 @@ extension StreamContext {
         let scaledHeight = Int(outputSize.height)
         currentCaptureSize = outputSize
         currentEncodedSize = outputSize
+        MirageLogger
+            .stream(
+                "Stream scale update sizing: base \(Int(derivedBaseSize.width))x\(Int(derivedBaseSize.height))," +
+                    " requested \(requestedStreamScale)," +
+                    " resolved \(streamScale)," +
+                    " encoded \(scaledWidth)x\(scaledHeight)"
+            )
 
         if let captureEngine {
             switch captureMode {
@@ -262,6 +269,16 @@ extension StreamContext {
         await encoder?.forceKeyframe()
 
         MirageLogger.stream("Display switch complete (frames resumed)")
+    }
+
+    func updateDisplayCaptureExclusions(_ windows: [SCWindowWrapper]) async {
+        guard isRunning, captureMode == .display, let captureEngine else { return }
+        let resolvedWindows = windows.map(\.window)
+        do {
+            try await captureEngine.updateExcludedWindows(resolvedWindows)
+        } catch {
+            MirageLogger.error(.stream, "Failed to update display capture exclusions: \(error)")
+        }
     }
 
     func allowEncodingAfterRegistration() async {

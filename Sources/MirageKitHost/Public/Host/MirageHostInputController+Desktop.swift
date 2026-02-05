@@ -136,7 +136,7 @@ extension MirageHostInputController {
         }
 
         cgEvent.flags = event.modifiers.cgEventFlags
-        cgEvent.post(tap: .cghidEventTap)
+        MirageInjectedEventTag.postHID(cgEvent)
     }
 
     /// Inject scroll event for desktop streaming.

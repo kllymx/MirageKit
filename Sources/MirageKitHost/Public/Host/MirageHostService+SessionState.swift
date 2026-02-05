@@ -57,6 +57,8 @@ extension MirageHostService {
         } else if !clientsByConnection.isEmpty {
             await startLoginDisplayStreamIfNeeded()
         }
+
+        await updateLightsOutState()
     }
 
     func sendSessionState(to clientContext: ClientContext) async {

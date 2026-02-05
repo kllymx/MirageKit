@@ -69,7 +69,8 @@ extension WindowCaptureEngine {
             knownScaleFactor: knownScaleFactor,
             outputScale: clampedScale,
             resolution: nil,
-            showsCursor: false
+            showsCursor: false,
+            excludedWindows: []
         )
 
         // CRITICAL: For virtual displays on headless Macs, do NOT use .best or .nominal
@@ -213,6 +214,7 @@ extension WindowCaptureEngine {
                 try await startDisplayCapture(
                     display: resolvedConfig.display,
                     resolution: resolvedConfig.resolution,
+                    excludedWindows: resolvedConfig.excludedWindows,
                     showsCursor: resolvedConfig.showsCursor,
                     onFrame: onFrame,
                     onDimensionChange: dimensionChangeHandler ?? { _, _ in }
@@ -238,6 +240,7 @@ extension WindowCaptureEngine {
     func startDisplayCapture(
         display: SCDisplay,
         resolution: CGSize? = nil,
+        excludedWindows: [SCWindow] = [],
         showsCursor: Bool = true,
         onFrame: @escaping @Sendable (CapturedFrame) -> Void,
         onDimensionChange: @escaping @Sendable (Int, Int) -> Void = { _, _ in }
@@ -266,8 +269,10 @@ extension WindowCaptureEngine {
             knownScaleFactor: nil,
             outputScale: 1.0,
             resolution: resolution,
-            showsCursor: showsCursor
+            showsCursor: showsCursor,
+            excludedWindows: excludedWindows
         )
+        self.excludedWindows = excludedWindows
 
         updateDisplayRefreshRate(for: display.displayID)
         if let refreshRate = currentDisplayRefreshRate { MirageLogger.capture("Display mode refresh rate: \(refreshRate)") }
@@ -325,7 +330,7 @@ extension WindowCaptureEngine {
         let capturedDisplayID = display.displayID
 
         // Create filter for the entire display
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
         contentFilter = filter
 
         if useExplicitCaptureDimensions {

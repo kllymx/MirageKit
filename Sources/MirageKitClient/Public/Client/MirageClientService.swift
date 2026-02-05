@@ -206,6 +206,9 @@ public final class MirageClientService {
     /// Thread-safe set of streams awaiting a first-packet startup log.
     let startupPacketPendingLock = NSLock()
     nonisolated(unsafe) var startupPacketPendingStorage: Set<StreamID> = []
+    var startupRegistrationRetryTasks: [StreamID: Task<Void, Never>] = [:]
+    let startupRegistrationRetryInterval: Duration = .seconds(1)
+    let startupRegistrationRetryLimit: Int = 5
 
     nonisolated func isStartupPacketPending(_ streamID: StreamID) -> Bool {
         startupPacketPendingLock.lock()
@@ -233,6 +236,36 @@ public final class MirageClientService {
         startupPacketPendingLock.lock()
         startupPacketPendingStorage.remove(streamID)
         startupPacketPendingLock.unlock()
+    }
+
+    func startStartupRegistrationRetry(streamID: StreamID) {
+        startupRegistrationRetryTasks[streamID]?.cancel()
+        startupRegistrationRetryTasks[streamID] = Task { [weak self] in
+            guard let self else { return }
+            var attempt = 0
+            while !Task.isCancelled, attempt < self.startupRegistrationRetryLimit {
+                try? await Task.sleep(for: self.startupRegistrationRetryInterval)
+                if Task.isCancelled { return }
+                if !self.isStartupPacketPending(streamID) { return }
+                attempt += 1
+                MirageLogger.client(
+                    "Startup packet pending for stream \(streamID); resending registration (\(attempt)/\(self.startupRegistrationRetryLimit))"
+                )
+                do {
+                    if self.udpConnection == nil { try await self.startVideoConnection() }
+                    try await self.sendStreamRegistration(streamID: streamID)
+                    self.sendKeyframeRequest(for: streamID)
+                } catch {
+                    MirageLogger.error(.client, "Startup registration retry failed: \(error)")
+                }
+            }
+        }
+    }
+
+    func cancelStartupRegistrationRetry(streamID: StreamID) {
+        if let task = startupRegistrationRetryTasks.removeValue(forKey: streamID) {
+            task.cancel()
+        }
     }
 
     /// Thread-safe set of stream IDs where input is blocked (decoder unhealthy)

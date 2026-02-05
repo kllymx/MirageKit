@@ -19,7 +19,7 @@ extension MirageHostInputController {
     // MARK: - Helpers
 
     func postEvent(_ event: CGEvent) {
-        event.post(tap: .cgSessionEventTap)
+        MirageInjectedEventTag.postSession(event)
     }
 
     func currentWindowFrame(for windowID: WindowID) -> CGRect? {

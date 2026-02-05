@@ -58,6 +58,7 @@ extension MirageHostService {
             singleClientConnectionID = nil
             await stopLoginDisplayStream(newState: sessionState)
             await cleanupSharedVirtualDisplayIfIdle()
+            lockHostIfNeeded()
         }
     }
 

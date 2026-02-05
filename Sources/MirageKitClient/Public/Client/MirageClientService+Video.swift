@@ -148,6 +148,7 @@ extension MirageClientService {
                             if service.takeStartupPacketPending(streamID) {
                                 Task { @MainActor in
                                     service.logStartupFirstPacketIfNeeded(streamID: streamID)
+                                    service.cancelStartupRegistrationRetry(streamID: streamID)
                                 }
                             }
 

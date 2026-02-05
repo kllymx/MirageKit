@@ -103,6 +103,8 @@ public extension MirageHostService {
             await disconnectClient(client)
         }
 
+        lightsOutController.deactivate()
+
         // Force release power assertion on full stop
         await PowerAssertionManager.shared.forceDisable()
 

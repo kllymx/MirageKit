@@ -231,6 +231,8 @@ extension MirageClientService {
         startupPacketPendingLock.withLock {
             startupPacketPendingStorage.removeAll()
         }
+        for task in startupRegistrationRetryTasks.values { task.cancel() }
+        startupRegistrationRetryTasks.removeAll()
         activeStreams.removeAll()
         for session in storedSessions {
             sessionStore.removeSession(session.id)

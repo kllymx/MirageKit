@@ -32,13 +32,12 @@ extension MirageClientService {
     func clampedStreamScale() -> CGFloat {
         let scale = resolutionScale
         guard scale > 0 else { return 1.0 }
-        return quantizedStreamScale(scale)
+        return clampStreamScale(scale)
     }
 
-    func quantizedStreamScale(_ scale: CGFloat) -> CGFloat {
-        let clamped = max(0.1, min(1.0, scale))
-        let rounded = (clamped * 100).rounded() / 100
-        return max(0.1, min(1.0, rounded))
+    func clampStreamScale(_ scale: CGFloat) -> CGFloat {
+        guard scale > 0 else { return 1.0 }
+        return max(0.1, min(1.0, scale))
     }
 
     public func getMainDisplayResolution() -> CGSize {
@@ -138,15 +137,14 @@ extension MirageClientService {
     async throws {
         guard case .connected = connectionState, let connection else { throw MirageError.protocolError("Not connected") }
 
-        let clampedScale = quantizedStreamScale(scale)
+        let clampedScale = clampStreamScale(scale)
         let request = StreamScaleChangeMessage(
             streamID: streamID,
             streamScale: clampedScale
         )
         let message = try ControlMessage(type: .streamScaleChange, content: request)
 
-        let roundedScale = (clampedScale * 100).rounded() / 100
-        MirageLogger.client("Sending stream scale change for stream \(streamID): \(roundedScale)")
+        MirageLogger.client("Sending stream scale change for stream \(streamID): \(clampedScale)")
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: message.serialize(), completion: .contentProcessed { error in
