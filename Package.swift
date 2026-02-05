@@ -40,10 +40,7 @@ let package = Package(
         ),
         .target(
             name: "MirageKitHost",
-            dependencies: ["MirageKit"],
-            resources: [
-                .process("Resources"),
-            ]
+            dependencies: ["MirageKit"]
         ),
         .testTarget(
             name: "MirageKitTests",

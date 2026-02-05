@@ -67,7 +67,6 @@ MirageKit/
 │     │  ├─ Network/
 │     │  ├─ Utilities/
 │     │  └─ VirtualDisplay/
-│     └─ Resources/
 └─ Tests/
    ├─ MirageKitHostTests/
    └─ MirageKitTests/
