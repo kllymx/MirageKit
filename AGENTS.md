@@ -20,6 +20,8 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - MirageKit targets the latest supported OS releases; availability checks are not used in MirageKit code.
 - Lights Out mode: host-side blackout overlay + input block for app streaming and mirrored desktop streaming; overlay windows are excluded from display capture.
 - Client startup retries stream registration until the first UDP packet arrives.
+- Virtual display serial recovery alternates between two deterministic serial slots per color space to bound ColorSync profile churn while preserving mode-mismatch recovery.
+- Virtual display descriptor capabilities stay fixed at 5120x2880 while active mode selection remains resolution-specific.
 
 ## Interaction Guidelines
 - Planning phase: detailed step list; explicit plan.

@@ -30,10 +30,26 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
     private nonisolated(unsafe) static var cgVirtualDisplayModeClass: AnyClass?
     private nonisolated(unsafe) static var isLoaded = false
     private nonisolated(unsafe) static var cachedSerialNumbers: [MirageColorSpace: UInt32] = [:]
+    private nonisolated(unsafe) static var cachedSerialSlots: [MirageColorSpace: SerialSlot] = [:]
     nonisolated(unsafe) static var configuredDisplayOrigins: [CGDirectDisplayID: CGPoint] = [:]
     static let mirageVendorID: UInt32 = 0x1234
     static let mirageProductID: UInt32 = 0xE000
-    private static let serialDefaultsPrefix = "MirageVirtualDisplaySerial"
+    private static let descriptorMaxPixelsWide: UInt32 = 5120
+    private static let descriptorMaxPixelsHigh: UInt32 = 2880
+    private static let descriptorPPI: Double = 220.0
+    private static let legacySerialDefaultsPrefix = "MirageVirtualDisplaySerial"
+    private static let serialSlotDefaultsPrefix = "MirageVirtualDisplaySerialSlot"
+    private static let serialSchemeVersionDefaultsKey = "MirageVirtualDisplaySerialSchemeVersion"
+    private static let serialSchemeVersion = 2
+
+    private enum SerialSlot: Int {
+        case primary = 0
+        case alternate = 1
+
+        mutating func toggle() {
+            self = self == .primary ? .alternate : .primary
+        }
+    }
 
     // MARK: - Color Primaries
 
@@ -117,7 +133,6 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         height: Int,
         refreshRate: Double = 60.0,
         hiDPI: Bool = false,
-        ppi: Double = 220.0,
         colorSpace: MirageColorSpace
     )
     -> VirtualDisplayContext? {
@@ -146,12 +161,13 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         descriptor.setValue(mirageVendorID, forKey: "vendorID")
         descriptor.setValue(mirageProductID, forKey: "productID") // Virtual display marker
         descriptor.setValue(persistentSerialNumber(for: colorSpace), forKey: "serialNum")
-        descriptor.setValue(UInt32(width), forKey: "maxPixelsWide")
-        descriptor.setValue(UInt32(height), forKey: "maxPixelsHigh")
+        // Keep descriptor capabilities stable across sessions to avoid stale identity-specific mode state.
+        descriptor.setValue(descriptorMaxPixelsWide, forKey: "maxPixelsWide")
+        descriptor.setValue(descriptorMaxPixelsHigh, forKey: "maxPixelsHigh")
 
         // Calculate physical size in millimeters
-        let widthMM = 25.4 * Double(width) / ppi
-        let heightMM = 25.4 * Double(height) / ppi
+        let widthMM = 25.4 * Double(descriptorMaxPixelsWide) / descriptorPPI
+        let heightMM = 25.4 * Double(descriptorMaxPixelsHigh) / descriptorPPI
         descriptor.setValue(CGSize(width: widthMM, height: heightMM), forKey: "sizeInMillimeters")
 
         switch colorSpace {
@@ -189,7 +205,7 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
 
         MirageLogger
             .host(
-                "Creating virtual display '\(name)' at \(width)x\(height) pixels, mode=\(modeWidth)x\(modeHeight)@\(refreshRate)Hz, hiDPI=\(hiDPI), color=\(colorSpace.displayName)"
+                "Creating virtual display '\(name)' at \(width)x\(height) pixels, mode=\(modeWidth)x\(modeHeight)@\(refreshRate)Hz, caps=\(descriptorMaxPixelsWide)x\(descriptorMaxPixelsHigh), hiDPI=\(hiDPI), color=\(colorSpace.displayName)"
             )
 
         // Create the virtual display
@@ -243,38 +259,85 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         )
     }
 
-    private static func serialDefaultsKey(for colorSpace: MirageColorSpace) -> String {
-        "\(serialDefaultsPrefix).\(colorSpace.rawValue)"
+    private static func legacySerialDefaultsKey(for colorSpace: MirageColorSpace) -> String {
+        "\(legacySerialDefaultsPrefix).\(colorSpace.rawValue)"
+    }
+
+    private static func serialSlotDefaultsKey(for colorSpace: MirageColorSpace) -> String {
+        "\(serialSlotDefaultsPrefix).\(colorSpace.rawValue)"
+    }
+
+    private static func migrateLegacySerialStateIfNeeded() {
+        let defaults = UserDefaults.standard
+        if defaults.integer(forKey: serialSchemeVersionDefaultsKey) >= serialSchemeVersion {
+            return
+        }
+
+        for colorSpace in MirageColorSpace.allCases {
+            defaults.removeObject(forKey: legacySerialDefaultsKey(for: colorSpace))
+            defaults.removeObject(forKey: serialSlotDefaultsKey(for: colorSpace))
+        }
+
+        cachedSerialNumbers.removeAll()
+        cachedSerialSlots.removeAll()
+        defaults.set(serialSchemeVersion, forKey: serialSchemeVersionDefaultsKey)
+        MirageLogger.host("Initialized bounded virtual display serial strategy")
+    }
+
+    private static func serialNumber(for colorSpace: MirageColorSpace, slot: SerialSlot) -> UInt32 {
+        switch (colorSpace, slot) {
+        case (.displayP3, .primary):
+            0x4D50_3330 // "MP30"
+        case (.displayP3, .alternate):
+            0x4D50_3331 // "MP31"
+        case (.sRGB, .primary):
+            0x4D53_5230 // "MSR0"
+        case (.sRGB, .alternate):
+            0x4D53_5231 // "MSR1"
+        }
+    }
+
+    private static func currentSerialSlot(for colorSpace: MirageColorSpace) -> SerialSlot {
+        if let cached = cachedSerialSlots[colorSpace] {
+            return cached
+        }
+
+        let defaults = UserDefaults.standard
+        let defaultsKey = serialSlotDefaultsKey(for: colorSpace)
+        let storedSlot = defaults.integer(forKey: defaultsKey)
+        let slot = SerialSlot(rawValue: storedSlot) ?? .primary
+        cachedSerialSlots[colorSpace] = slot
+        return slot
     }
 
     private static func persistentSerialNumber(for colorSpace: MirageColorSpace) -> UInt32 {
+        migrateLegacySerialStateIfNeeded()
+
         if let cached = cachedSerialNumbers[colorSpace] {
             return cached
         }
 
-        let defaultsKey = serialDefaultsKey(for: colorSpace)
-        let stored = UserDefaults.standard.integer(forKey: defaultsKey)
-        if stored > 0, stored <= Int(UInt32.max) {
-            let serial = UInt32(stored)
-            cachedSerialNumbers[colorSpace] = serial
-            return serial
-        }
-
-        var serial: UInt32 = 0
-        repeat {
-            serial = UInt32.random(in: 1 ... UInt32.max)
-        } while serial == 0
-
-        UserDefaults.standard.set(Int(serial), forKey: defaultsKey)
+        let slot = currentSerialSlot(for: colorSpace)
+        let serial = serialNumber(for: colorSpace, slot: slot)
         cachedSerialNumbers[colorSpace] = serial
         return serial
     }
 
     static func invalidatePersistentSerial(for colorSpace: MirageColorSpace) {
-        cachedSerialNumbers[colorSpace] = nil
-        let defaultsKey = serialDefaultsKey(for: colorSpace)
-        UserDefaults.standard.removeObject(forKey: defaultsKey)
-        MirageLogger.host("Invalidated virtual display serial for \(colorSpace.displayName)")
+        migrateLegacySerialStateIfNeeded()
+
+        var slot = currentSerialSlot(for: colorSpace)
+        slot.toggle()
+
+        let defaults = UserDefaults.standard
+        defaults.set(slot.rawValue, forKey: serialSlotDefaultsKey(for: colorSpace))
+        cachedSerialSlots[colorSpace] = slot
+
+        let serial = serialNumber(for: colorSpace, slot: slot)
+        cachedSerialNumbers[colorSpace] = serial
+        MirageLogger.host(
+            "Rotated virtual display serial for \(colorSpace.displayName) to slot \(slot.rawValue) (\(serial))"
+        )
     }
 
     static func invalidateAllPersistentSerials() {
