@@ -14,6 +14,30 @@ import MirageKit
 import ScreenCaptureKit
 
 extension StreamContext {
+    enum EncoderSettingsUpdateMode: Equatable {
+        case noChange
+        case bitrateOnly
+        case fullReconfiguration
+    }
+
+    static func encoderSettingsUpdateMode(
+        current: MirageEncoderConfiguration,
+        updated: MirageEncoderConfiguration
+    )
+    -> EncoderSettingsUpdateMode {
+        let pixelFormatChanged = updated.pixelFormat != current.pixelFormat
+        let colorSpaceChanged = updated.colorSpace != current.colorSpace
+        let bitrateChanged = updated.bitrate != current.bitrate
+
+        guard pixelFormatChanged || colorSpaceChanged || bitrateChanged else {
+            return .noChange
+        }
+        if bitrateChanged, !pixelFormatChanged, !colorSpaceChanged {
+            return .bitrateOnly
+        }
+        return .fullReconfiguration
+    }
+
     func updateEncoderSettings(
         pixelFormat: MiragePixelFormat?,
         colorSpace: MirageColorSpace?,
@@ -32,9 +56,21 @@ extension StreamContext {
             updatedConfig.bitrate = normalizedBitrate
         }
 
-        guard updatedConfig.pixelFormat != encoderConfig.pixelFormat ||
-            updatedConfig.colorSpace != encoderConfig.colorSpace ||
-            updatedConfig.bitrate != encoderConfig.bitrate else {
+        let updateMode = Self.encoderSettingsUpdateMode(
+            current: encoderConfig,
+            updated: updatedConfig
+        )
+        guard updateMode != .noChange else { return }
+
+        if updateMode == .bitrateOnly {
+            encoderConfig = updatedConfig
+            await packetSender?.setTargetBitrateBps(encoderConfig.bitrate)
+            await encoder?.updateBitrate(encoderConfig.bitrate)
+            if currentEncodedSize != .zero {
+                await applyDerivedQuality(for: currentEncodedSize, logLabel: "Bitrate update")
+            }
+            let bitrateText = encoderConfig.bitrate.map(String.init) ?? "auto"
+            MirageLogger.stream("Encoder bitrate update applied: bitrate=\(bitrateText)")
             return
         }
 

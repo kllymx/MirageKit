@@ -19,9 +19,13 @@ import ScreenCaptureKit
 
 /// Stream output delegate
 final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
+    enum KeyframeRequestReason: Sendable {
+        case fallbackResume
+    }
+
     private let onFrame: @Sendable (CapturedFrame) -> Void
     private let onAudio: (@Sendable (CapturedAudioBuffer) -> Void)?
-    private let onKeyframeRequest: @Sendable () -> Void
+    private let onKeyframeRequest: @Sendable (KeyframeRequestReason) -> Void
     private let onCaptureStall: @Sendable (String) -> Void
     private let shouldDropFrame: (@Sendable () -> Bool)?
     private let usesDetailedMetadata: Bool
@@ -95,7 +99,7 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     init(
         onFrame: @escaping @Sendable (CapturedFrame) -> Void,
         onAudio: (@Sendable (CapturedAudioBuffer) -> Void)? = nil,
-        onKeyframeRequest: @escaping @Sendable () -> Void,
+        onKeyframeRequest: @escaping @Sendable (KeyframeRequestReason) -> Void,
         onCaptureStall: @escaping @Sendable (String) -> Void = { _ in },
         shouldDropFrame: (@Sendable () -> Bool)? = nil,
         windowID: CGWindowID = 0,
@@ -270,7 +274,7 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         fallbackLock.unlock()
 
         if fallbackDuration > keyframeThreshold {
-            onKeyframeRequest()
+            onKeyframeRequest(.fallbackResume)
             MirageLogger
                 .capture(
                     "SCK resumed after long fallback (\(Int(fallbackDuration * 1000))ms) - scheduling keyframe"

@@ -61,6 +61,11 @@ public extension MirageClientService {
         var overrides = encoderOverrides ?? MirageEncoderOverrides()
         if overrides.keyFrameInterval == nil { overrides.keyFrameInterval = keyFrameInterval }
         applyEncoderOverrides(overrides, to: &request)
+        if let bitrate = request.bitrate, bitrate > 0 {
+            pendingAdaptiveFallbackBitrateByWindowID[window.id] = bitrate
+        } else {
+            pendingAdaptiveFallbackBitrateByWindowID.removeValue(forKey: window.id)
+        }
 
         request.streamScale = clampedStreamScale()
         request.latencyMode = latencyMode
@@ -87,6 +92,10 @@ public extension MirageClientService {
         >) in
             self.streamStartedContinuation = continuation
         }
+        if let pendingBitrate = pendingAdaptiveFallbackBitrateByWindowID.removeValue(forKey: window.id) {
+            adaptiveFallbackBitrateByStream[realStreamID] = pendingBitrate
+        }
+        adaptiveFallbackLastAppliedTime[realStreamID] = 0
 
         MirageLogger.client("Stream started with ID \(realStreamID)")
 
@@ -110,8 +119,6 @@ public extension MirageClientService {
     internal func setupControllerForStream(_ streamID: StreamID) async {
         if let existingController = controllersByStream[streamID] {
             await existingController.resetForNewSession()
-            adaptiveFallbackStageByStream[streamID] = .preferP010
-            adaptiveFallbackScaleByStream[streamID] = clampedStreamScale()
             adaptiveFallbackLastAppliedTime[streamID] = 0
             MirageLogger.client("Reset existing controller for stream \(streamID)")
             return
@@ -120,8 +127,11 @@ public extension MirageClientService {
         let payloadSize = miragePayloadSize(maxPacketSize: networkConfig.maxPacketSize)
         let controller = StreamController(streamID: streamID, maxPayloadSize: payloadSize)
         controllersByStream[streamID] = controller
-        adaptiveFallbackStageByStream[streamID] = .preferP010
-        adaptiveFallbackScaleByStream[streamID] = clampedStreamScale()
+        if adaptiveFallbackBitrateByStream[streamID] == nil,
+           let pendingAppAdaptiveFallbackBitrate,
+           pendingAppAdaptiveFallbackBitrate > 0 {
+            adaptiveFallbackBitrateByStream[streamID] = pendingAppAdaptiveFallbackBitrate
+        }
         adaptiveFallbackLastAppliedTime[streamID] = 0
 
         let capturedStreamID = streamID
@@ -208,8 +218,7 @@ public extension MirageClientService {
             await controller.stop()
             controllersByStream.removeValue(forKey: streamID)
         }
-        adaptiveFallbackStageByStream.removeValue(forKey: streamID)
-        adaptiveFallbackScaleByStream.removeValue(forKey: streamID)
+        adaptiveFallbackBitrateByStream.removeValue(forKey: streamID)
         adaptiveFallbackLastAppliedTime.removeValue(forKey: streamID)
 
         await updateReassemblerSnapshot()

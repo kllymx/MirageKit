@@ -197,9 +197,14 @@ extension MirageHostService {
             return
         }
 
+        let hasFormatChange = request.pixelFormat != nil || request.colorSpace != nil
+        let hasBitrateChange = request.bitrate != nil
+        let hasScaleChange = request.streamScale != nil
+        let shouldBroadcastStreamUpdate = hasFormatChange || hasScaleChange
+
         let normalizedBitrate = MirageBitrateQualityMapper.normalizedTargetBitrate(bitrate: request.bitrate)
         do {
-            if request.pixelFormat != nil || request.colorSpace != nil || request.bitrate != nil {
+            if hasFormatChange || hasBitrateChange {
                 try await context.updateEncoderSettings(
                     pixelFormat: request.pixelFormat,
                     colorSpace: request.colorSpace,
@@ -209,7 +214,11 @@ extension MirageHostService {
             if let streamScale = request.streamScale {
                 try await context.updateStreamScale(StreamContext.clampStreamScale(streamScale))
             }
-            await sendStreamScaleUpdate(streamID: request.streamID)
+            if shouldBroadcastStreamUpdate {
+                await sendStreamScaleUpdate(streamID: request.streamID)
+            } else {
+                MirageLogger.host("Encoder settings update applied without stream resize notification (bitrate only)")
+            }
         } catch {
             MirageLogger.error(.host, "Failed to apply encoder settings update: \(error)")
         }

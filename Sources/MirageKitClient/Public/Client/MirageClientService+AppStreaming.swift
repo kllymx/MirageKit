@@ -71,6 +71,11 @@ public extension MirageClientService {
         var overrides = encoderOverrides ?? MirageEncoderOverrides()
         if overrides.keyFrameInterval == nil { overrides.keyFrameInterval = keyFrameInterval }
         applyEncoderOverrides(overrides, to: &request)
+        if let bitrate = request.bitrate, bitrate > 0 {
+            pendingAppAdaptiveFallbackBitrate = bitrate
+        } else {
+            pendingAppAdaptiveFallbackBitrate = nil
+        }
 
         let message = try ControlMessage(type: .selectApp, content: request)
         connection.send(content: message.serialize(), completion: .idempotent)

@@ -25,6 +25,8 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - Virtual display readiness validates HiDPI mode using paired logical and pixel dimensions from `CGDisplayCopyDisplayMode`, while desktop input bounds prefer cached logical display bounds.
 - CGVirtualDisplay settings use `hiDPI=2` when Retina mode is requested; `hiDPI=1` can resolve to non-Retina 1x modes on some hosts.
 - Capture watchdog restart requests are canceled once stream shutdown begins; display-capture stall recovery uses a 1.5-second threshold, while window-capture stall recovery uses an 8-second threshold for extended menu-tracking pauses.
+- Capture recovery distinguishes fallback-resume keyframe requests from capture-restart requests; fallback resume queues an urgent keyframe without epoch reset, and capture restart uses reset+epoch escalation only after repeated restart streaks.
+- Capture restart pacing uses exponential cooldown for repeated restarts (base 3 seconds, 2x multiplier, 18-second cap) and resets the streak after a 20-second stable window.
 - iOS drawable size changes are reported immediately once they exceed the resize tolerance (0.5% or 4px).
 
 ## Interaction Guidelines
@@ -121,7 +123,8 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 - Recovery-only cadence: scheduled periodic keyframes are disabled; startup and recovery keyframes remain active.
 - Compression ceiling: frame quality is capped at 0.80 while bitrate targets remain independent.
 - FEC policy: loss windows prioritize keyframe parity; P-frame parity is enabled only during hard recovery windows.
-- Adaptive fallback: sustained overload steps format from 4:4:4 to P010, then NV12, then reduces stream scale by 10% with a 0.6 floor.
+- Adaptive fallback: automatic mode applies bitrate-only steps first (15% per trigger, 15-second cooldown, 8 Mbps floor) before disruptive reconfiguration.
+- Custom mode recovery: stream parameters remain fixed while stream-health warnings report sustained degradation.
 - Decoder recovery: client enters keyframe-only mode after decode errors or decode-backpressure overload until a fresh keyframe arrives.
 
 ## Input Handling

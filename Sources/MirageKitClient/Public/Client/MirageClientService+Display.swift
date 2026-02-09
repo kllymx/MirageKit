@@ -153,7 +153,6 @@ extension MirageClientService {
                 }
             })
         }
-        adaptiveFallbackScaleByStream[streamID] = clampedScale
     }
 
     func sendStreamRefreshRateChange(

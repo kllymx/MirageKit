@@ -199,6 +199,11 @@ extension HEVCEncoder {
         MirageLogger.encoder("Encoder bitrate target: \(bitrateText) Mbps")
     }
 
+    func applyBitrateSettingsToActiveSession() {
+        guard let session = compressionSession else { return }
+        applyBitrateSettings(session)
+    }
+
     private func configureSession(_ session: VTCompressionSession) throws {
         // Real-time encoding
         setProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)

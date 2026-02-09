@@ -323,38 +323,50 @@ extension MirageClientService {
             return
         }
 
-        let stage = adaptiveFallbackStageByStream[streamID] ?? .preferP010
+        guard let currentBitrate = adaptiveFallbackBitrateByStream[streamID], currentBitrate > 0 else {
+            MirageLogger.client("Adaptive fallback skipped (missing baseline bitrate) for stream \(streamID)")
+            return
+        }
+        guard let nextBitrate = Self.nextAdaptiveFallbackBitrate(
+            currentBitrate: currentBitrate,
+            step: adaptiveFallbackBitrateStep,
+            floor: adaptiveFallbackBitrateFloorBps
+        ) else {
+            let floorText = Double(adaptiveFallbackBitrateFloorBps / 1_000_000)
+                .formatted(.number.precision(.fractionLength(1)))
+            MirageLogger.client("Adaptive fallback floor reached (\(floorText) Mbps) for stream \(streamID)")
+            return
+        }
+
         Task { [weak self] in
             guard let self else { return }
             do {
-                switch stage {
-                case .preferP010:
-                    try await sendStreamEncoderSettingsChange(streamID: streamID, pixelFormat: .p010)
-                    adaptiveFallbackStageByStream[streamID] = .nv12
-                    adaptiveFallbackLastAppliedTime[streamID] = CFAbsoluteTimeGetCurrent()
-                    MirageLogger.client("Adaptive fallback stage P010 applied for stream \(streamID)")
-                case .nv12:
-                    try await sendStreamEncoderSettingsChange(streamID: streamID, pixelFormat: .nv12)
-                    adaptiveFallbackStageByStream[streamID] = .streamScale
-                    adaptiveFallbackLastAppliedTime[streamID] = CFAbsoluteTimeGetCurrent()
-                    MirageLogger.client("Adaptive fallback stage NV12 applied for stream \(streamID)")
-                case .streamScale:
-                    let currentScale = adaptiveFallbackScaleByStream[streamID] ?? clampedStreamScale()
-                    let nextScale = max(0.6, clampStreamScale(currentScale * 0.9))
-                    if nextScale >= currentScale {
-                        MirageLogger.client("Adaptive fallback scale floor reached for stream \(streamID)")
-                        return
-                    }
-                    try await sendStreamEncoderSettingsChange(streamID: streamID, streamScale: nextScale)
-                    adaptiveFallbackScaleByStream[streamID] = nextScale
-                    adaptiveFallbackLastAppliedTime[streamID] = CFAbsoluteTimeGetCurrent()
-                    let scaleText = Double(nextScale).formatted(.number.precision(.fractionLength(2)))
-                    MirageLogger.client("Adaptive fallback scale applied to \(scaleText) for stream \(streamID)")
-                }
+                try await sendStreamEncoderSettingsChange(streamID: streamID, bitrate: nextBitrate)
+                adaptiveFallbackBitrateByStream[streamID] = nextBitrate
+                adaptiveFallbackLastAppliedTime[streamID] = CFAbsoluteTimeGetCurrent()
+                let fromMbps = (Double(currentBitrate) / 1_000_000.0)
+                    .formatted(.number.precision(.fractionLength(1)))
+                let toMbps = (Double(nextBitrate) / 1_000_000.0)
+                    .formatted(.number.precision(.fractionLength(1)))
+                MirageLogger.client("Adaptive fallback bitrate step \(fromMbps) → \(toMbps) Mbps for stream \(streamID)")
             } catch {
                 MirageLogger.error(.client, "Failed to apply adaptive fallback for stream \(streamID): \(error)")
             }
         }
+    }
+
+    nonisolated static func nextAdaptiveFallbackBitrate(
+        currentBitrate: Int,
+        step: Double,
+        floor: Int
+    )
+    -> Int? {
+        guard currentBitrate > 0 else { return nil }
+        let clampedStep = max(0.0, min(step, 1.0))
+        let clampedFloor = max(1, floor)
+        let steppedBitrate = Int((Double(currentBitrate) * clampedStep).rounded(.down))
+        let nextBitrate = max(clampedFloor, steppedBitrate)
+        return nextBitrate < currentBitrate ? nextBitrate : nil
     }
 
     func handleVideoPacket(_ data: Data, header: FrameHeader) async {

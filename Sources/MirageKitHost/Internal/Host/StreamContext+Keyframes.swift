@@ -80,17 +80,37 @@ extension StreamContext {
         return true
     }
 
-    func forceKeyframeAfterCaptureRestart() {
+    func forceKeyframeAfterFallbackResume() {
         keyframeSendDeadline = 0
         lastKeyframeRequestTime = 0
-        noteLossEvent(reason: "Capture restart", enablePFrameFEC: true)
+        let queued = queueKeyframe(
+            reason: "Fallback resume keyframe",
+            checkInFlight: false,
+            requiresFlush: false,
+            requiresReset: false,
+            urgent: true
+        )
+        if !queued { MirageLogger.stream("Fallback resume keyframe skipped (unable to queue)") }
+    }
+
+    func forceKeyframeAfterCaptureRestart(
+        restartStreak: Int,
+        shouldEscalateRecovery: Bool
+    ) {
+        keyframeSendDeadline = 0
+        lastKeyframeRequestTime = 0
+        let reason = "Capture restart (streak \(restartStreak))"
+        noteLossEvent(reason: reason, enablePFrameFEC: true)
         let queued = queueKeyframe(
             reason: "Fallback keyframe",
             checkInFlight: false,
             requiresFlush: true,
-            requiresReset: true,
+            requiresReset: shouldEscalateRecovery,
             urgent: true
         )
+        if shouldEscalateRecovery {
+            MirageLogger.stream("Capture restart escalation active (streak \(restartStreak))")
+        }
         if !queued { MirageLogger.stream("Fallback keyframe skipped (unable to queue after restart)") }
     }
 

@@ -310,16 +310,14 @@ public final class MirageClientService {
     var refreshRateMismatchCounts: [StreamID: Int] = [:]
     var refreshRateFallbackTargets: [StreamID: Int] = [:]
 
-    enum AdaptiveFallbackStage: Int {
-        case preferP010
-        case nv12
-        case streamScale
-    }
-
-    var adaptiveFallbackStageByStream: [StreamID: AdaptiveFallbackStage] = [:]
-    var adaptiveFallbackScaleByStream: [StreamID: CGFloat] = [:]
+    var adaptiveFallbackBitrateByStream: [StreamID: Int] = [:]
     var adaptiveFallbackLastAppliedTime: [StreamID: CFAbsoluteTime] = [:]
+    var pendingAdaptiveFallbackBitrateByWindowID: [WindowID: Int] = [:]
+    var pendingDesktopAdaptiveFallbackBitrate: Int?
+    var pendingAppAdaptiveFallbackBitrate: Int?
     let adaptiveFallbackCooldown: CFAbsoluteTime = 15.0
+    let adaptiveFallbackBitrateStep: Double = 0.85
+    let adaptiveFallbackBitrateFloorBps: Int = 8_000_000
 
     public enum ConnectionState: Equatable {
         case disconnected

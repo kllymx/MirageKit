@@ -127,8 +127,7 @@ extension MirageClientService {
             removeActiveStreamID(streamID)
             registeredStreamIDs.remove(streamID)
             clearStreamRefreshRateOverride(streamID: streamID)
-            adaptiveFallbackStageByStream.removeValue(forKey: streamID)
-            adaptiveFallbackScaleByStream.removeValue(forKey: streamID)
+            adaptiveFallbackBitrateByStream.removeValue(forKey: streamID)
             adaptiveFallbackLastAppliedTime.removeValue(forKey: streamID)
 
             Task { [weak self] in
@@ -335,8 +334,7 @@ extension MirageClientService {
             } else {
                 metricsStore.clear(streamID: streamID)
                 cursorStore.clear(streamID: streamID)
-                adaptiveFallbackStageByStream.removeValue(forKey: streamID)
-                adaptiveFallbackScaleByStream.removeValue(forKey: streamID)
+                adaptiveFallbackBitrateByStream.removeValue(forKey: streamID)
                 adaptiveFallbackLastAppliedTime.removeValue(forKey: streamID)
 
                 removeActiveStreamID(streamID)

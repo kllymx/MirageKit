@@ -26,6 +26,10 @@ extension MirageClientService {
             desktopStreamID = streamID
             desktopStreamResolution = CGSize(width: started.width, height: started.height)
             refreshRateOverridesByStream[streamID] = getScreenMaxRefreshRate()
+            if let pendingDesktopAdaptiveFallbackBitrate, pendingDesktopAdaptiveFallbackBitrate > 0 {
+                adaptiveFallbackBitrateByStream[streamID] = pendingDesktopAdaptiveFallbackBitrate
+            }
+            adaptiveFallbackLastAppliedTime[streamID] = 0
             if desktopStreamRequestStartTime > 0 {
                 let deltaMs = Int((CFAbsoluteTimeGetCurrent() - desktopStreamRequestStartTime) * 1000)
                 MirageLogger
@@ -102,9 +106,9 @@ extension MirageClientService {
             streamStartupFirstPacketReceived.remove(streamID)
             clearStartupPacketPending(streamID)
             cancelStartupRegistrationRetry(streamID: streamID)
-            adaptiveFallbackStageByStream.removeValue(forKey: streamID)
-            adaptiveFallbackScaleByStream.removeValue(forKey: streamID)
+            adaptiveFallbackBitrateByStream.removeValue(forKey: streamID)
             adaptiveFallbackLastAppliedTime.removeValue(forKey: streamID)
+            pendingDesktopAdaptiveFallbackBitrate = nil
 
             Task {
                 if let controller = self.controllersByStream[streamID] {

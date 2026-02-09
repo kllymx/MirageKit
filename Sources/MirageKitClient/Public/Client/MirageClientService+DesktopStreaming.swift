@@ -67,6 +67,11 @@ public extension MirageClientService {
         var overrides = encoderOverrides ?? MirageEncoderOverrides()
         if overrides.keyFrameInterval == nil { overrides.keyFrameInterval = keyFrameInterval }
         applyEncoderOverrides(overrides, to: &request)
+        if let bitrate = request.bitrate, bitrate > 0 {
+            pendingDesktopAdaptiveFallbackBitrate = bitrate
+        } else {
+            pendingDesktopAdaptiveFallbackBitrate = nil
+        }
 
         let message = try ControlMessage(type: .startDesktopStream, content: request)
         desktopStreamRequestStartTime = CFAbsoluteTimeGetCurrent()

@@ -110,6 +110,11 @@ extension HEVCEncoder {
             )
     }
 
+    func updateBitrate(_ bitrate: Int?) {
+        configuration = configuration.withOverrides(bitrate: bitrate)
+        applyBitrateSettingsToActiveSession()
+    }
+
     func forceKeyframe() {
         MirageLogger.encoder("Keyframe requested")
         forceNextKeyframe = true

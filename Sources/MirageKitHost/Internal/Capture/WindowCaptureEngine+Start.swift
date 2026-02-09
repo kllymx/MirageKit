@@ -142,8 +142,8 @@ extension WindowCaptureEngine {
         streamOutput = CaptureStreamOutput(
             onFrame: onFrame,
             onAudio: onAudio,
-            onKeyframeRequest: { [weak self] in
-                Task { await self?.markKeyframeRequested() }
+            onKeyframeRequest: { [weak self] reason in
+                Task { await self?.markKeyframeRequested(reason: reason) }
             },
             onCaptureStall: { [weak self] reason in
                 Task { await self?.restartCapture(reason: reason) }
@@ -196,6 +196,9 @@ extension WindowCaptureEngine {
                 capturedAudioHandler = nil
                 dimensionChangeHandler = nil
                 isRestarting = false
+                pendingKeyframeRequest = nil
+                restartStreak = 0
+                lastRestartAttemptTime = 0
             }
             return
         }
@@ -217,6 +220,9 @@ extension WindowCaptureEngine {
             capturedAudioHandler = nil
             dimensionChangeHandler = nil
             isRestarting = false
+            pendingKeyframeRequest = nil
+            restartStreak = 0
+            lastRestartAttemptTime = 0
         }
     }
 
@@ -228,13 +234,57 @@ extension WindowCaptureEngine {
         let onAudio = capturedAudioHandler
         let onDimensionChange = dimensionChangeHandler ?? { _, _ in }
         let now = CFAbsoluteTimeGetCurrent()
-        guard now - lastRestartTime > restartCooldown else { return }
+
+        if restartStreak > 0,
+           Self.shouldResetRestartStreak(
+               now: now,
+               lastRestartAttemptTime: lastRestartAttemptTime,
+               resetWindow: restartStreakResetWindow
+           ) {
+            MirageLogger.capture("Capture restart streak reset after stable interval")
+            restartStreak = 0
+        }
+
+        let requiredCooldown = Self.restartCooldown(
+            for: max(1, restartStreak),
+            base: restartCooldownBase,
+            multiplier: restartBackoffMultiplier,
+            cap: restartCooldownCap
+        )
+        if lastRestartAttemptTime > 0 {
+            let elapsed = now - lastRestartAttemptTime
+            if elapsed <= requiredCooldown {
+                let remainingMs = Int(((requiredCooldown - elapsed) * 1000).rounded())
+                MirageLogger
+                    .capture(
+                        "Capture restart suppressed (\(reason)); cooldown \(remainingMs)ms remaining (streak \(restartStreak))"
+                    )
+                return
+            }
+        }
+
         let restartGeneration = self.restartGeneration
 
         isRestarting = true
         defer { isRestarting = false }
-        lastRestartTime = now
-        MirageLogger.capture("Restarting capture (\(reason))")
+        restartStreak += 1
+        let activeRestartStreak = restartStreak
+        lastRestartAttemptTime = now
+        let shouldEscalateRecovery = Self.shouldEscalateRecovery(
+            restartStreak: activeRestartStreak,
+            threshold: hardRecoveryEscalationThreshold
+        )
+        let nextCooldown = Self.restartCooldown(
+            for: activeRestartStreak,
+            base: restartCooldownBase,
+            multiplier: restartBackoffMultiplier,
+            cap: restartCooldownCap
+        )
+        MirageLogger
+            .capture(
+                "Restarting capture (\(reason)); streak=\(activeRestartStreak), " +
+                    "escalate=\(shouldEscalateRecovery), nextCooldown=\(Int((nextCooldown * 1000).rounded()))ms"
+            )
 
         await stopCapture(clearSessionState: false)
         guard restartGeneration == self.restartGeneration else {
@@ -277,7 +327,10 @@ extension WindowCaptureEngine {
                     onDimensionChange: onDimensionChange
                 )
             }
-            pendingKeyframeRequest = true
+            markCaptureRestartKeyframeRequested(
+                restartStreak: activeRestartStreak,
+                shouldEscalateRecovery: shouldEscalateRecovery
+            )
         } catch {
             MirageLogger.error(.capture, "Capture restart failed: \(error)")
         }
@@ -418,8 +471,8 @@ extension WindowCaptureEngine {
         streamOutput = CaptureStreamOutput(
             onFrame: onFrame,
             onAudio: onAudio,
-            onKeyframeRequest: { [weak self] in
-                Task { await self?.markKeyframeRequested() }
+            onKeyframeRequest: { [weak self] reason in
+                Task { await self?.markKeyframeRequested(reason: reason) }
             },
             onCaptureStall: { [weak self] reason in
                 Task { await self?.restartCapture(reason: reason) }

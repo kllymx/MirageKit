@@ -154,8 +154,17 @@ extension StreamContext {
 
             var forceKeyframe = didResetEncoder
             if !forceKeyframe, let captureEngine {
-                let shouldRequest = await captureEngine.consumePendingKeyframeRequest()
-                if shouldRequest { forceKeyframeAfterCaptureRestart() }
+                if let pendingReason = await captureEngine.consumePendingKeyframeRequest() {
+                    switch pendingReason {
+                    case .fallbackResume:
+                        forceKeyframeAfterFallbackResume()
+                    case let .captureRestart(restartStreak, shouldEscalateRecovery):
+                        forceKeyframeAfterCaptureRestart(
+                            restartStreak: restartStreak,
+                            shouldEscalateRecovery: shouldEscalateRecovery
+                        )
+                    }
+                }
             }
             if !forceKeyframe { forceKeyframe = shouldEmitPendingKeyframe(queueBytes: queueBytes) }
 
