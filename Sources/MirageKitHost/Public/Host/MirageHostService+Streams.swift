@@ -27,7 +27,8 @@ public extension MirageHostService {
         pixelFormat: MiragePixelFormat? = nil,
         colorSpace: MirageColorSpace? = nil,
         captureQueueDepth: Int? = nil,
-        bitrate: Int? = nil
+        bitrate: Int? = nil,
+        audioConfiguration: MirageAudioConfiguration? = nil
         // hdr: Bool = false
     )
     async throws -> MirageStreamSession {
@@ -106,6 +107,13 @@ public extension MirageHostService {
 
         streamsByID[streamID] = context
         activeStreams.append(session)
+
+        let resolvedAudioConfiguration = audioConfiguration ?? .default
+        await activateAudioForClient(
+            clientID: client.id,
+            sourceStreamID: streamID,
+            configuration: resolvedAudioConfiguration
+        )
 
         // Enable power assertion to prevent display sleep during streaming
         await PowerAssertionManager.shared.enable()
@@ -216,6 +224,7 @@ public extension MirageHostService {
             await context.stop()
             streamsByID.removeValue(forKey: streamID)
             activeStreams.removeAll { $0.id == streamID }
+            await deactivateAudioSourceIfNeeded(streamID: streamID)
             throw error
         }
 
@@ -322,6 +331,7 @@ public extension MirageHostService {
         await context.stop()
         streamsByID.removeValue(forKey: session.id)
         activeStreams.removeAll { $0.id == session.id }
+        await deactivateAudioSourceIfNeeded(streamID: session.id)
 
         // Remove from input cache (thread-safe)
         inputStreamCacheActor.remove(session.id)

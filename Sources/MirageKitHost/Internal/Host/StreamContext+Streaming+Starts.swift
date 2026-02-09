@@ -147,10 +147,12 @@ extension StreamContext {
             window: window,
             application: application,
             display: display,
-            outputScale: streamScale
-        ) { [weak self] frame in
-            self?.enqueueCapturedFrame(frame)
-        }
+            outputScale: streamScale,
+            onFrame: { [weak self] frame in
+                self?.enqueueCapturedFrame(frame)
+            },
+            onAudio: onCapturedAudioBuffer
+        )
         await refreshCaptureCadence()
 
         MirageLogger.stream("Started stream \(streamID) for window \(windowID)")
@@ -285,10 +287,12 @@ extension StreamContext {
         try await captureEngine.startDisplayCapture(
             display: display,
             resolution: outputSize,
-            showsCursor: showsCursor
-        ) { [weak self] frame in
-            self?.enqueueCapturedFrame(frame)
-        }
+            showsCursor: showsCursor,
+            onFrame: { [weak self] frame in
+                self?.enqueueCapturedFrame(frame)
+            },
+            onAudio: onCapturedAudioBuffer
+        )
         await refreshCaptureCadence()
 
         MirageLogger.stream("Started login display stream \(streamID) at \(width)x\(height)")
@@ -425,10 +429,12 @@ extension StreamContext {
             display: display,
             resolution: captureSizeForSCK,
             excludedWindows: resolvedExcludedWindows,
-            showsCursor: false
-        ) { [weak self] frame in
-            self?.enqueueCapturedFrame(frame)
-        }
+            showsCursor: false,
+            onFrame: { [weak self] frame in
+                self?.enqueueCapturedFrame(frame)
+            },
+            onAudio: onCapturedAudioBuffer
+        )
         await refreshCaptureCadence()
 
         MirageLogger.stream("Started desktop display stream \(streamID) at \(width)x\(height)")

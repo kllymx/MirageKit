@@ -59,6 +59,8 @@ package struct SelectAppMessage: Codable {
     package let streamScale: CGFloat?
     /// Client latency preference for buffering behavior
     package let latencyMode: MirageStreamLatencyMode?
+    /// Client audio streaming configuration
+    package let audioConfiguration: MirageAudioConfiguration?
     // TODO: HDR support - requires proper virtual display EDR configuration
     // /// Whether to stream in HDR (Rec. 2020 with PQ transfer function)
     // var preferHDR: Bool = false
@@ -77,6 +79,7 @@ package struct SelectAppMessage: Codable {
         case bitrate
         case streamScale
         case latencyMode
+        case audioConfiguration
     }
 
     package init(
@@ -92,7 +95,8 @@ package struct SelectAppMessage: Codable {
         captureQueueDepth: Int? = nil,
         bitrate: Int? = nil,
         streamScale: CGFloat? = nil,
-        latencyMode: MirageStreamLatencyMode? = nil
+        latencyMode: MirageStreamLatencyMode? = nil,
+        audioConfiguration: MirageAudioConfiguration? = nil
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.dataPort = dataPort
@@ -107,6 +111,7 @@ package struct SelectAppMessage: Codable {
         self.bitrate = bitrate
         self.streamScale = streamScale
         self.latencyMode = latencyMode
+        self.audioConfiguration = audioConfiguration
     }
 }
 

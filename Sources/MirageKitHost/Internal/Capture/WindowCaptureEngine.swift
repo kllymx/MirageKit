@@ -29,6 +29,7 @@ actor WindowCaptureEngine {
     var isCapturing = false
     var isRestarting = false
     var capturedFrameHandler: (@Sendable (CapturedFrame) -> Void)?
+    var capturedAudioHandler: (@Sendable (CapturedAudioBuffer) -> Void)?
     var dimensionChangeHandler: (@Sendable (Int, Int) -> Void)?
     var captureMode: CaptureMode?
     var captureSessionConfig: CaptureSessionConfiguration?
@@ -44,6 +45,7 @@ actor WindowCaptureEngine {
     var excludedWindows: [SCWindow] = []
     var lastRestartTime: CFAbsoluteTime = 0
     let restartCooldown: CFAbsoluteTime = 3.0
+    var restartGeneration: UInt64 = 0
 
     init(
         configuration: MirageEncoderConfiguration,

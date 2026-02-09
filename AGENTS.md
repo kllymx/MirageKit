@@ -17,11 +17,14 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - Custom mode: encoder overrides for pixel format, color space, bitrate, and keyframe interval.
 - `MIRAGE_SIGNPOST=1` enables Instruments signposts for decode/render timing.
 - Automatic quality tests use staged UDP payloads (warmup + ramp until plateau) plus VideoToolbox benchmarks for encode/decode timing; quality probes use a SwiftUI animated probe scene and a transport probe that sends real encoded frames over UDP.
+- Host setting `muteLocalAudioWhileStreaming` mutes host output while audio streaming is active and restores prior mute state when audio streaming stops.
 - MirageKit targets the latest supported OS releases; availability checks are not used in MirageKit code.
 - Lights Out mode: host-side blackout overlay + input block for app streaming and mirrored desktop streaming; overlay windows are excluded from display capture.
 - Client startup retries stream registration until the first UDP packet arrives.
 - Virtual display serial recovery alternates between two deterministic serial slots per color space to bound ColorSync profile churn while preserving mode-mismatch recovery.
-- Virtual display descriptor capabilities stay fixed at 5120x2880 while active mode selection remains resolution-specific.
+- Virtual display readiness validates HiDPI mode using paired logical and pixel dimensions from `CGDisplayCopyDisplayMode`, while desktop input bounds prefer cached logical display bounds.
+- CGVirtualDisplay settings use `hiDPI=2` when Retina mode is requested; `hiDPI=1` can resolve to non-Retina 1x modes on some hosts.
+- Capture watchdog restart requests are canceled once stream shutdown begins, and stall-triggered restart thresholds account for extended menu-tracking pauses.
 
 ## Interaction Guidelines
 - Planning phase: detailed step list; explicit plan.
@@ -87,6 +90,7 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 - Shared protocol, logging, and support utilities: `Sources/MirageKit/Internal/`.
 - Client decode, render, and transport: `Sources/MirageKitClient/Internal/`.
 - Host capture, encode, virtual display, and host utilities: `Sources/MirageKitHost/Internal/`.
+- Host audio mute control: `Sources/MirageKitHost/Internal/Audio/HostAudioMuteController.swift`.
 - Host Lights Out support: `Sources/MirageKitHost/Internal/Host/HostLightsOutController.swift`, `Sources/MirageKitHost/Internal/Host/MirageInjectedEventTag.swift`.
 - Host Lights Out integration: `Sources/MirageKitHost/Public/Host/MirageHostService+LightsOut.swift`.
 

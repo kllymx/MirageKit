@@ -92,6 +92,27 @@ extension MirageHostService {
                 continue
             }
 
+            if magic.elementsEqual([0x4D, 0x49, 0x52, 0x41]) {
+                guard data.count >= 22 else {
+                    MirageLogger.host("Invalid audio registration packet")
+                    continue
+                }
+                let streamID = data.dropFirst(4).prefix(2).withUnsafeBytes { ptr in
+                    ptr.loadUnaligned(fromByteOffset: 0, as: StreamID.self).littleEndian
+                }
+                let uuidBytes: uuid_t = data.withUnsafeBytes { ptr in
+                    ptr.loadUnaligned(fromByteOffset: 6, as: uuid_t.self)
+                }
+                let deviceID = UUID(uuid: uuidBytes)
+                audioConnectionsByClientID[deviceID] = connection
+                let pathText = connection.currentPath.map(describeNetworkPath) ?? "unknown"
+                MirageLogger.host(
+                    "Registered audio UDP connection for device \(deviceID.uuidString), stream \(streamID) (\(pathText))"
+                )
+                await handleAudioConnectionRegistered(clientID: deviceID, streamID: streamID)
+                continue
+            }
+
             guard magic.elementsEqual([0x4D, 0x49, 0x52, 0x47]) else {
                 MirageLogger.host("Invalid video registration magic")
                 continue

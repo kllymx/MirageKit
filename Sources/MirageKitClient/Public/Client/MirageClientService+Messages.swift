@@ -88,6 +88,10 @@ extension MirageClientService {
             handleQualityTestResult(message)
         case .qualityProbeResult:
             handleQualityProbeResult(message)
+        case .audioStreamStarted:
+            handleAudioStreamStarted(message)
+        case .audioStreamStopped:
+            handleAudioStreamStopped(message)
         default:
             break
         }

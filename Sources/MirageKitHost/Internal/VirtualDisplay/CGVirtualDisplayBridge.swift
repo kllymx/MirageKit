@@ -34,13 +34,12 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
     nonisolated(unsafe) static var configuredDisplayOrigins: [CGDirectDisplayID: CGPoint] = [:]
     static let mirageVendorID: UInt32 = 0x1234
     static let mirageProductID: UInt32 = 0xE000
-    private static let descriptorMaxPixelsWide: UInt32 = 5120
-    private static let descriptorMaxPixelsHigh: UInt32 = 2880
-    private static let descriptorPPI: Double = 220.0
     private static let legacySerialDefaultsPrefix = "MirageVirtualDisplaySerial"
     private static let serialSlotDefaultsPrefix = "MirageVirtualDisplaySerialSlot"
     private static let serialSchemeVersionDefaultsKey = "MirageVirtualDisplaySerialSchemeVersion"
     private static let serialSchemeVersion = 2
+    private static let hiDPIDisabledSetting: UInt32 = 0
+    private static let hiDPIEnabledSetting: UInt32 = 2
 
     private enum SerialSlot: Int {
         case primary = 0
@@ -117,6 +116,331 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
 
     // MARK: - Virtual Display Creation
 
+    private static func hiDPISettingValue(enabled: Bool) -> UInt32 {
+        enabled ? hiDPIEnabledSetting : hiDPIDisabledSetting
+    }
+
+    private static func createDisplayMode(
+        modeClass: NSObject.Type,
+        width: Int,
+        height: Int,
+        refreshRate: Double
+    )
+    -> AnyObject? {
+        let allocSelector = NSSelectorFromString("alloc")
+        guard let allocatedMode = (modeClass as AnyObject).perform(allocSelector)?.takeUnretainedValue() else {
+            MirageLogger.error(.host, "Failed to allocate CGVirtualDisplayMode")
+            return nil
+        }
+
+        let initSelector = NSSelectorFromString("initWithWidth:height:refreshRate:")
+        guard (allocatedMode as AnyObject).responds(to: initSelector) else {
+            MirageLogger.error(.host, "CGVirtualDisplayMode doesn't respond to initWithWidth:height:refreshRate:")
+            return nil
+        }
+
+        typealias InitModeIMP = @convention(c) (AnyObject, Selector, UInt32, UInt32, Double) -> Unmanaged<AnyObject>
+        let initIMP = (allocatedMode as AnyObject).method(for: initSelector)
+        let initialize = unsafeBitCast(initIMP, to: InitModeIMP.self)
+        let initialized = initialize(
+            allocatedMode as AnyObject,
+            initSelector,
+            UInt32(width),
+            UInt32(height),
+            refreshRate
+        ).takeRetainedValue()
+        return initialized
+    }
+
+    private static func applySettings(
+        _ settings: AnyObject,
+        to display: AnyObject
+    )
+    -> Bool {
+        let applySelector = NSSelectorFromString("applySettings:")
+        guard (display as AnyObject).responds(to: applySelector) else {
+            MirageLogger.error(.host, "CGVirtualDisplay doesn't respond to applySettings:")
+            return false
+        }
+
+        typealias ApplySettingsIMP = @convention(c) (AnyObject, Selector, AnyObject) -> Bool
+        let applyIMP = (display as AnyObject).method(for: applySelector)
+        let apply = unsafeBitCast(applyIMP, to: ApplySettingsIMP.self)
+        return apply(display as AnyObject, applySelector, settings)
+    }
+
+    private struct ModeActivationAttempt {
+        let modeWidth: Int
+        let modeHeight: Int
+        let hiDPISetting: UInt32
+        let label: String
+    }
+
+    private static func modeActivationAttempts(
+        pixelWidth: Int,
+        pixelHeight: Int,
+        hiDPI: Bool
+    )
+    -> [ModeActivationAttempt] {
+        guard hiDPI else {
+            return [ModeActivationAttempt(
+                modeWidth: pixelWidth,
+                modeHeight: pixelHeight,
+                hiDPISetting: hiDPIDisabledSetting,
+                label: "pixel-hiDPI0"
+            )]
+        }
+
+        let logicalWidth = max(1, pixelWidth / 2)
+        let logicalHeight = max(1, pixelHeight / 2)
+        let candidates: [ModeActivationAttempt] = [
+            ModeActivationAttempt(
+                modeWidth: logicalWidth,
+                modeHeight: logicalHeight,
+                hiDPISetting: hiDPIEnabledSetting,
+                label: "logical-hiDPI\(hiDPIEnabledSetting)"
+            ),
+            ModeActivationAttempt(
+                modeWidth: logicalWidth,
+                modeHeight: logicalHeight,
+                hiDPISetting: 1,
+                label: "logical-hiDPI1"
+            ),
+            ModeActivationAttempt(
+                modeWidth: pixelWidth,
+                modeHeight: pixelHeight,
+                hiDPISetting: hiDPIEnabledSetting,
+                label: "pixel-hiDPI\(hiDPIEnabledSetting)"
+            ),
+            ModeActivationAttempt(
+                modeWidth: pixelWidth,
+                modeHeight: pixelHeight,
+                hiDPISetting: 1,
+                label: "pixel-hiDPI1"
+            ),
+        ]
+
+        var deduped: [ModeActivationAttempt] = []
+        var seen = Set<String>()
+        for candidate in candidates {
+            let key = "\(candidate.modeWidth)x\(candidate.modeHeight)-\(candidate.hiDPISetting)"
+            if seen.insert(key).inserted {
+                deduped.append(candidate)
+            }
+        }
+        return deduped
+    }
+
+    private struct DescriptorAttempt {
+        let serial: UInt32
+        let queue: DispatchQueue
+        let label: String
+    }
+
+    private static func descriptorAttempts(
+        persistentSerial: UInt32,
+        hiDPI: Bool
+    )
+    -> [DescriptorAttempt] {
+        var attempts: [DescriptorAttempt] = [
+            DescriptorAttempt(
+                serial: persistentSerial,
+                queue: .main,
+                label: "persistent-main-queue"
+            ),
+        ]
+
+        if hiDPI {
+            attempts.append(
+                DescriptorAttempt(
+                    serial: 0,
+                    queue: .global(qos: .userInteractive),
+                    label: "serial0-global-queue"
+                )
+            )
+            attempts.append(
+                DescriptorAttempt(
+                    serial: persistentSerial,
+                    queue: .global(qos: .userInteractive),
+                    label: "persistent-global-queue"
+                )
+            )
+        }
+
+        return attempts
+    }
+
+    private static func forceDisplayModeSelection(
+        displayID: CGDirectDisplayID,
+        targetLogical: CGSize
+    )
+    -> Bool {
+        guard let allModes = CGDisplayCopyAllDisplayModes(displayID, nil) as? [CGDisplayMode], !allModes.isEmpty else {
+            MirageLogger.error(.host, "Failed to enumerate display modes for display \(displayID)")
+            return false
+        }
+
+        let tolerance: CGFloat = 1.0
+        let preferredMode = allModes.first { mode in
+            abs(CGFloat(mode.width) - targetLogical.width) <= tolerance &&
+                abs(CGFloat(mode.height) - targetLogical.height) <= tolerance
+        }
+
+        guard let mode = preferredMode else {
+            MirageLogger.host(
+                "No matching display mode for display \(displayID) at logical \(targetLogical); available count=\(allModes.count)"
+            )
+            return false
+        }
+
+        let result = CGDisplaySetDisplayMode(displayID, mode, nil)
+        if result != .success {
+            MirageLogger.error(.host, "CGDisplaySetDisplayMode failed for display \(displayID): \(result.rawValue)")
+            return false
+        }
+
+        MirageLogger.host(
+            "Forced display mode selection for display \(displayID) to \(mode.width)x\(mode.height) (pixel=\(mode.pixelWidth)x\(mode.pixelHeight))"
+        )
+        return true
+    }
+
+    private static func activateAndValidateMode(
+        display: AnyObject,
+        settingsClass: NSObject.Type,
+        modeClass: NSObject.Type,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        refreshRate: Double,
+        hiDPI: Bool,
+        serial: UInt32?
+    )
+    -> Bool {
+        let requestedLogical = CGSize(
+            width: hiDPI ? pixelWidth / 2 : pixelWidth,
+            height: hiDPI ? pixelHeight / 2 : pixelHeight
+        )
+        let requestedPixel = CGSize(width: pixelWidth, height: pixelHeight)
+
+        for attempt in modeActivationAttempts(pixelWidth: pixelWidth, pixelHeight: pixelHeight, hiDPI: hiDPI) {
+            guard let displayMode = createDisplayMode(
+                modeClass: modeClass,
+                width: attempt.modeWidth,
+                height: attempt.modeHeight,
+                refreshRate: refreshRate
+            ) else { continue }
+
+            let settings = settingsClass.init()
+            settings.setValue([displayMode], forKey: "modes")
+            settings.setValue(attempt.hiDPISetting, forKey: "hiDPI")
+
+            MirageLogger.host(
+                "Applying virtual display mode attempt \(attempt.label): mode=\(attempt.modeWidth)x\(attempt.modeHeight)@\(refreshRate)Hz, hiDPISetting=\(attempt.hiDPISetting)"
+            )
+
+            guard applySettings(settings, to: display) else {
+                MirageLogger.error(.host, "Failed to apply virtual display settings for attempt \(attempt.label)")
+                continue
+            }
+
+            guard let displayID = (display as AnyObject).value(forKey: "displayID") as? CGDirectDisplayID, displayID != 0 else {
+                MirageLogger.error(.host, "Virtual display has invalid displayID after attempt \(attempt.label)")
+                continue
+            }
+
+            if validateModeActivation(
+                displayID: displayID,
+                requestedLogical: requestedLogical,
+                requestedPixel: requestedPixel,
+                hiDPISetting: attempt.hiDPISetting,
+                serial: serial
+            ) {
+                MirageLogger.host("Virtual display Retina activation succeeded with attempt \(attempt.label)")
+                return true
+            }
+
+            if forceDisplayModeSelection(displayID: displayID, targetLogical: requestedLogical),
+               validateModeActivation(
+                   displayID: displayID,
+                   requestedLogical: requestedLogical,
+                   requestedPixel: requestedPixel,
+                   hiDPISetting: attempt.hiDPISetting,
+                   serial: serial
+               ) {
+                MirageLogger.host("Virtual display Retina activation succeeded after forced mode select (\(attempt.label))")
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private static func modeValidationLogLine(
+        displayID: CGDirectDisplayID,
+        serial: UInt32?,
+        hiDPISetting: UInt32,
+        requestedLogical: CGSize,
+        requestedPixel: CGSize,
+        observed: DisplayModeSizes?
+    )
+    -> String {
+        let observedLogical = observed?.logical ?? .zero
+        let observedPixel = observed?.pixel ?? .zero
+        let scale = observedLogical.width > 0 ? observedPixel.width / observedLogical.width : 0
+        let scaleText = Double(scale).formatted(.number.precision(.fractionLength(2)))
+        let serialText = serial.map(String.init) ?? "unknown"
+        return "Virtual display mode validation failed: displayID=\(displayID), serial=\(serialText), hiDPISetting=\(hiDPISetting), requestedLogical=\(requestedLogical), requestedPixel=\(requestedPixel), observedLogical=\(observedLogical), observedPixel=\(observedPixel), observedScale=\(scaleText)x"
+    }
+
+    private static func validateModeActivation(
+        displayID: CGDirectDisplayID,
+        requestedLogical: CGSize,
+        requestedPixel: CGSize,
+        hiDPISetting: UInt32,
+        serial: UInt32?
+    )
+    -> Bool {
+        guard let observed = currentDisplayModeSizes(displayID) else {
+            MirageLogger.error(
+                .host,
+                modeValidationLogLine(
+                    displayID: displayID,
+                    serial: serial,
+                    hiDPISetting: hiDPISetting,
+                    requestedLogical: requestedLogical,
+                    requestedPixel: requestedPixel,
+                    observed: nil
+                )
+            )
+            return false
+        }
+
+        let logicalMatches = abs(observed.logical.width - requestedLogical.width) <= 1 &&
+            abs(observed.logical.height - requestedLogical.height) <= 1
+        let pixelMatches = abs(observed.pixel.width - requestedPixel.width) <= 1 &&
+            abs(observed.pixel.height - requestedPixel.height) <= 1
+
+        if logicalMatches, pixelMatches {
+            let scale = observed.logical.width > 0 ? observed.pixel.width / observed.logical.width : 0
+            let scaleText = Double(scale).formatted(.number.precision(.fractionLength(2)))
+            MirageLogger.host("Virtual display mode active: logical=\(observed.logical), pixel=\(observed.pixel), scale=\(scaleText)x")
+            return true
+        }
+
+        MirageLogger.error(
+            .host,
+            modeValidationLogLine(
+                displayID: displayID,
+                serial: serial,
+                hiDPISetting: hiDPISetting,
+                requestedLogical: requestedLogical,
+                requestedPixel: requestedPixel,
+                observed: observed
+            )
+        )
+        return false
+    }
+
     /// Create a virtual display with the specified resolution
     /// - Parameters:
     ///   - name: Display name (shown in System Preferences)
@@ -133,6 +457,7 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         height: Int,
         refreshRate: Double = 60.0,
         hiDPI: Bool = false,
+        ppi: Double = 220.0,
         colorSpace: MirageColorSpace
     )
     -> VirtualDisplayContext? {
@@ -155,108 +480,98 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         let originalMainDisplayID = CGMainDisplayID()
         MirageLogger.host("Original main display ID: \(originalMainDisplayID)")
 
-        // Create descriptor
-        let descriptor = descriptorClass.init()
-        descriptor.setValue(name, forKey: "name")
-        descriptor.setValue(mirageVendorID, forKey: "vendorID")
-        descriptor.setValue(mirageProductID, forKey: "productID") // Virtual display marker
-        descriptor.setValue(persistentSerialNumber(for: colorSpace), forKey: "serialNum")
-        // Keep descriptor capabilities stable across sessions to avoid stale identity-specific mode state.
-        descriptor.setValue(descriptorMaxPixelsWide, forKey: "maxPixelsWide")
-        descriptor.setValue(descriptorMaxPixelsHigh, forKey: "maxPixelsHigh")
+        let persistentSerial = persistentSerialNumber(for: colorSpace)
+        let descriptorProfiles = descriptorAttempts(persistentSerial: persistentSerial, hiDPI: hiDPI)
 
-        // Calculate physical size in millimeters
-        let widthMM = 25.4 * Double(descriptorMaxPixelsWide) / descriptorPPI
-        let heightMM = 25.4 * Double(descriptorMaxPixelsHigh) / descriptorPPI
-        descriptor.setValue(CGSize(width: widthMM, height: heightMM), forKey: "sizeInMillimeters")
+        for profile in descriptorProfiles {
+            let descriptor = descriptorClass.init()
+            descriptor.setValue(name, forKey: "name")
+            descriptor.setValue(mirageVendorID, forKey: "vendorID")
+            descriptor.setValue(mirageProductID, forKey: "productID")
+            descriptor.setValue(profile.serial, forKey: "serialNum")
+            descriptor.setValue(UInt32(width), forKey: "maxPixelsWide")
+            descriptor.setValue(UInt32(height), forKey: "maxPixelsHigh")
 
-        switch colorSpace {
-        case .displayP3:
-            // TODO: HDR support - add BT.2020 primaries branch when EDR configuration is figured out
-            descriptor.setValue(P3D65Primaries.red, forKey: "redPrimary")
-            descriptor.setValue(P3D65Primaries.green, forKey: "greenPrimary")
-            descriptor.setValue(P3D65Primaries.blue, forKey: "bluePrimary")
-            descriptor.setValue(P3D65Primaries.whitePoint, forKey: "whitePoint")
-        case .sRGB:
-            descriptor.setValue(SRGBPrimaries.red, forKey: "redPrimary")
-            descriptor.setValue(SRGBPrimaries.green, forKey: "greenPrimary")
-            descriptor.setValue(SRGBPrimaries.blue, forKey: "bluePrimary")
-            descriptor.setValue(SRGBPrimaries.whitePoint, forKey: "whitePoint")
-        }
+            let widthMM = 25.4 * Double(width) / ppi
+            let heightMM = 25.4 * Double(height) / ppi
+            descriptor.setValue(CGSize(width: widthMM, height: heightMM), forKey: "sizeInMillimeters")
 
-        // Set dispatch queue
-        descriptor.setValue(DispatchQueue.main, forKey: "queue")
+            switch colorSpace {
+            case .displayP3:
+                descriptor.setValue(P3D65Primaries.red, forKey: "redPrimary")
+                descriptor.setValue(P3D65Primaries.green, forKey: "greenPrimary")
+                descriptor.setValue(P3D65Primaries.blue, forKey: "bluePrimary")
+                descriptor.setValue(P3D65Primaries.whitePoint, forKey: "whitePoint")
+            case .sRGB:
+                descriptor.setValue(SRGBPrimaries.red, forKey: "redPrimary")
+                descriptor.setValue(SRGBPrimaries.green, forKey: "greenPrimary")
+                descriptor.setValue(SRGBPrimaries.blue, forKey: "bluePrimary")
+                descriptor.setValue(SRGBPrimaries.whitePoint, forKey: "whitePoint")
+            }
 
-        // Create display mode
-        // When HiDPI is enabled, mode dimensions are LOGICAL (points), not pixels
-        // macOS will use 2x scaling: 1920x1200 logical → 3840x2400 framebuffer
-        let modeWidth = hiDPI ? width / 2 : width
-        let modeHeight = hiDPI ? height / 2 : height
+            descriptor.setValue(profile.queue, forKey: "queue")
 
-        let displayMode = modeClass.init()
-        displayMode.setValue(UInt32(modeWidth), forKey: "width")
-        displayMode.setValue(UInt32(modeHeight), forKey: "height")
-        displayMode.setValue(refreshRate, forKey: "refreshRate")
-
-        // Create settings
-        let settings = settingsClass.init()
-        settings.setValue([displayMode], forKey: "modes")
-        settings.setValue(hiDPI ? UInt32(1) : UInt32(0), forKey: "hiDPI")
-
-        MirageLogger
-            .host(
-                "Creating virtual display '\(name)' at \(width)x\(height) pixels, mode=\(modeWidth)x\(modeHeight)@\(refreshRate)Hz, caps=\(descriptorMaxPixelsWide)x\(descriptorMaxPixelsHigh), hiDPI=\(hiDPI), color=\(colorSpace.displayName)"
+            MirageLogger.host(
+                "Creating virtual display '\(name)' at \(width)x\(height) pixels, hiDPI=\(hiDPI), color=\(colorSpace.displayName), profile=\(profile.label), serial=\(profile.serial)"
             )
 
-        // Create the virtual display
-        // IMPORTANT: Use takeRetainedValue() so ARC properly manages the display lifecycle
-        let allocSelector = NSSelectorFromString("alloc")
-        guard let allocatedDisplay = (displayClass as AnyObject).perform(allocSelector)?.takeUnretainedValue() else {
-            MirageLogger.error(.host, "Failed to allocate CGVirtualDisplay")
-            return nil
+            let allocSelector = NSSelectorFromString("alloc")
+            guard let allocatedDisplay = (displayClass as AnyObject).perform(allocSelector)?.takeUnretainedValue() else {
+                MirageLogger.error(.host, "Failed to allocate CGVirtualDisplay")
+                continue
+            }
+
+            let initSelector = NSSelectorFromString("initWithDescriptor:")
+            guard (allocatedDisplay as AnyObject).responds(to: initSelector) else {
+                MirageLogger.error(.host, "CGVirtualDisplay doesn't respond to initWithDescriptor:")
+                continue
+            }
+
+            guard let display = (allocatedDisplay as AnyObject).perform(initSelector, with: descriptor)?
+                .takeRetainedValue() else {
+                MirageLogger.error(.host, "Failed to create CGVirtualDisplay for profile \(profile.label)")
+                continue
+            }
+
+            guard activateAndValidateMode(
+                display: display as AnyObject,
+                settingsClass: settingsClass,
+                modeClass: modeClass,
+                pixelWidth: width,
+                pixelHeight: height,
+                refreshRate: refreshRate,
+                hiDPI: hiDPI,
+                serial: profile.serial
+            ) else {
+                MirageLogger.error(.host, "Virtual display Retina activation failed for profile \(profile.label)")
+                continue
+            }
+
+            guard let displayID = (display as AnyObject).value(forKey: "displayID") as? CGDirectDisplayID else {
+                MirageLogger.error(.host, "Failed to get displayID from CGVirtualDisplay for profile \(profile.label)")
+                continue
+            }
+
+            MirageLogger.host("Created virtual display with ID: \(displayID)")
+
+            configureDisplaySeparation(
+                virtualDisplayID: displayID,
+                originalMainDisplayID: originalMainDisplayID,
+                requestedWidth: width,
+                requestedHeight: height
+            )
+
+            return VirtualDisplayContext(
+                display: display as AnyObject,
+                displayID: displayID,
+                resolution: CGSize(width: width, height: height),
+                refreshRate: refreshRate,
+                colorSpace: colorSpace
+            )
         }
 
-        let initSelector = NSSelectorFromString("initWithDescriptor:")
-        guard (allocatedDisplay as AnyObject).responds(to: initSelector) else {
-            MirageLogger.error(.host, "CGVirtualDisplay doesn't respond to initWithDescriptor:")
-            return nil
-        }
-
-        // takeRetainedValue() transfers ownership to ARC - when the reference count hits 0,
-        // the display will be properly deallocated and removed from the system
-        guard let display = (allocatedDisplay as AnyObject).perform(initSelector, with: descriptor)?
-            .takeRetainedValue() else {
-            MirageLogger.error(.host, "Failed to create CGVirtualDisplay")
-            return nil
-        }
-
-        // Apply settings
-        let applySelector = NSSelectorFromString("applySettings:")
-        if (display as AnyObject).responds(to: applySelector) { _ = (display as AnyObject).perform(applySelector, with: settings) }
-
-        // Get display ID
-        guard let displayID = (display as AnyObject).value(forKey: "displayID") as? CGDirectDisplayID else {
-            MirageLogger.error(.host, "Failed to get displayID from CGVirtualDisplay")
-            return nil
-        }
-
-        MirageLogger.host("Created virtual display with ID: \(displayID)")
-
-        // Configure display separation
-        configureDisplaySeparation(
-            virtualDisplayID: displayID,
-            originalMainDisplayID: originalMainDisplayID,
-            requestedWidth: width,
-            requestedHeight: height
-        )
-
-        return VirtualDisplayContext(
-            display: display as AnyObject,
-            displayID: displayID,
-            resolution: CGSize(width: width, height: height),
-            refreshRate: refreshRate,
-            colorSpace: colorSpace
-        )
+        MirageLogger.error(.host, "Virtual display failed Retina activation for all descriptor profiles")
+        return nil
     }
 
     private static func legacySerialDefaultsKey(for colorSpace: MirageColorSpace) -> String {
@@ -370,39 +685,23 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
             return false
         }
 
-        // Create new mode with requested resolution
-        // When HiDPI is enabled, mode dimensions are LOGICAL (points), not pixels
-        let modeWidth = hiDPI ? width / 2 : width
-        let modeHeight = hiDPI ? height / 2 : height
-
-        let displayMode = modeClass.init()
-        displayMode.setValue(UInt32(modeWidth), forKey: "width")
-        displayMode.setValue(UInt32(modeHeight), forKey: "height")
-        displayMode.setValue(refreshRate, forKey: "refreshRate")
-
-        // Create settings with the new mode
-        let settings = settingsClass.init()
-        settings.setValue([displayMode], forKey: "modes")
-        settings.setValue(hiDPI ? UInt32(1) : UInt32(0), forKey: "hiDPI")
-
-        // Apply new settings to existing display
-        let applySelector = NSSelectorFromString("applySettings:")
-        guard (display as AnyObject).responds(to: applySelector) else {
-            MirageLogger.error(.host, "CGVirtualDisplay doesn't respond to applySettings:")
-            return false
-        }
-
-        // applySettings: returns BOOL
-        let result = (display as AnyObject).perform(applySelector, with: settings)
-        let success = result != nil
+        let success = activateAndValidateMode(
+            display: display,
+            settingsClass: settingsClass,
+            modeClass: modeClass,
+            pixelWidth: width,
+            pixelHeight: height,
+            refreshRate: refreshRate,
+            hiDPI: hiDPI,
+            serial: nil
+        )
 
         if success {
-            MirageLogger
-                .host(
-                    "Updated virtual display resolution to \(width)x\(height) (mode: \(modeWidth)x\(modeHeight)@\(refreshRate)Hz, hiDPI=\(hiDPI))"
-                )
+            MirageLogger.host(
+                "Updated virtual display resolution to \(width)x\(height) @\(refreshRate)Hz, hiDPI=\(hiDPI)"
+            )
         } else {
-            MirageLogger.error(.host, "Failed to update virtual display resolution")
+            MirageLogger.error(.host, "Updated virtual display failed Retina activation")
         }
 
         return success

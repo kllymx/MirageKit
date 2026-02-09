@@ -63,6 +63,7 @@ extension MirageHostService {
             let bitrate = request.bitrate
             let streamScale = request.streamScale ?? 1.0
             let latencyMode = request.latencyMode ?? .smoothest
+            let audioConfiguration = request.audioConfiguration ?? .default
 
             // Check if app is available for streaming
             guard await appStreamManager.isAppAvailableForStreaming(request.bundleIdentifier) else {
@@ -80,13 +81,13 @@ extension MirageHostService {
             }
 
             // Start the app session
-            guard let session = await appStreamManager.startAppSession(
+            guard await appStreamManager.startAppSession(
                 bundleIdentifier: app.bundleIdentifier,
                 appName: app.name,
                 appPath: app.path,
                 clientID: client.id,
                 clientName: client.name
-            ) else {
+            ) != nil else {
                 MirageLogger.host("Failed to start app session for \(app.name)")
                 return
             }
@@ -138,7 +139,8 @@ extension MirageHostService {
                         pixelFormat: pixelFormat,
                         colorSpace: colorSpace,
                         captureQueueDepth: request.captureQueueDepth,
-                        bitrate: bitrate
+                        bitrate: bitrate,
+                        audioConfiguration: audioConfiguration
                     )
 
                     // Check window resizability

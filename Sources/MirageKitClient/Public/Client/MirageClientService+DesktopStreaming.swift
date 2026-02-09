@@ -20,6 +20,7 @@ public extension MirageClientService {
     ///   - mode: Desktop stream mode (mirrored vs secondary display).
     ///   - keyFrameInterval: Optional keyframe interval in frames.
     ///   - encoderOverrides: Optional per-stream encoder overrides.
+    ///   - audioConfiguration: Optional per-stream audio overrides.
     // TODO: HDR support - requires proper virtual display EDR configuration.
     // ///   - preferHDR: Whether to request HDR streaming (Rec. 2020 with PQ).
     func startDesktopStream(
@@ -27,7 +28,8 @@ public extension MirageClientService {
         displayResolution: CGSize? = nil,
         mode: MirageDesktopStreamMode = .mirrored,
         keyFrameInterval: Int? = nil,
-        encoderOverrides: MirageEncoderOverrides? = nil
+        encoderOverrides: MirageEncoderOverrides? = nil,
+        audioConfiguration: MirageAudioConfiguration? = nil
         // preferHDR: Bool = false
     )
     async throws {
@@ -55,6 +57,7 @@ public extension MirageClientService {
             bitrate: nil,
             streamScale: clampedStreamScale(),
             latencyMode: latencyMode,
+            audioConfiguration: audioConfiguration ?? self.audioConfiguration,
             dataPort: nil,
             maxRefreshRate: getScreenMaxRefreshRate()
         )

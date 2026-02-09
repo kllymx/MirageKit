@@ -15,6 +15,25 @@ import Foundation
 extension CGVirtualDisplayBridge {
     // MARK: - Display Utilities
 
+    struct DisplayModeSizes: Sendable {
+        let logical: CGSize
+        let pixel: CGSize
+    }
+
+    private static func sizeMatches(_ observed: CGSize, expected: CGSize, tolerance: CGFloat = 1.0) -> Bool {
+        guard expected.width > 0, expected.height > 0 else { return false }
+        let widthDelta = abs(observed.width - expected.width)
+        let heightDelta = abs(observed.height - expected.height)
+        return widthDelta <= tolerance && heightDelta <= tolerance
+    }
+
+    static func currentDisplayModeSizes(_ displayID: CGDirectDisplayID) -> DisplayModeSizes? {
+        guard let mode = CGDisplayCopyDisplayMode(displayID) else { return nil }
+        let logical = CGSize(width: CGFloat(mode.width), height: CGFloat(mode.height))
+        let pixel = CGSize(width: CGFloat(mode.pixelWidth), height: CGFloat(mode.pixelHeight))
+        return DisplayModeSizes(logical: logical, pixel: pixel)
+    }
+
     /// Get the bounds of a display
     /// Note: CGDisplayBounds can return stale values for newly created virtual displays
     /// Prefer using the resolution from VirtualDisplayContext when available
@@ -27,6 +46,7 @@ extension CGVirtualDisplayBridge {
     static func waitForDisplayReady(
         _ displayID: CGDirectDisplayID,
         expectedResolution: CGSize,
+        alternateExpectedResolution: CGSize = .zero,
         timeout: TimeInterval = 4.0,
         pollInterval: TimeInterval = 0.05
     )
@@ -41,9 +61,21 @@ extension CGVirtualDisplayBridge {
 
             if online, bounds.width > 0, bounds.height > 0 {
                 if expectedResolution.width > 0, expectedResolution.height > 0 {
-                    let widthDelta = abs(bounds.width - expectedResolution.width)
-                    let heightDelta = abs(bounds.height - expectedResolution.height)
-                    if widthDelta <= 1, heightDelta <= 1 { return bounds }
+                    let expectedPixel = alternateExpectedResolution.width > 0 && alternateExpectedResolution.height > 0
+                        ? alternateExpectedResolution
+                        : expectedResolution
+
+                    if let modeSizes = currentDisplayModeSizes(displayID),
+                       sizeMatches(modeSizes.logical, expected: expectedResolution),
+                       sizeMatches(modeSizes.pixel, expected: expectedPixel) {
+                        let origin = configuredDisplayOrigins[displayID] ?? bounds.origin
+                        return CGRect(origin: origin, size: expectedResolution)
+                    }
+
+                    if sizeMatches(bounds.size, expected: expectedResolution) {
+                        let origin = configuredDisplayOrigins[displayID] ?? bounds.origin
+                        return CGRect(origin: origin, size: expectedResolution)
+                    }
                 } else {
                     return bounds
                 }

@@ -64,6 +64,8 @@ package struct StartStreamMessage: Codable {
     package var streamScale: CGFloat?
     /// Client latency preference for buffering behavior
     package var latencyMode: MirageStreamLatencyMode?
+    /// Client audio streaming configuration
+    package var audioConfiguration: MirageAudioConfiguration?
     /// Client refresh rate override in Hz (60/120 based on client capability).
     package var maxRefreshRate: Int = 60
     // TODO: HDR support - requires proper virtual display EDR configuration
@@ -86,6 +88,7 @@ package struct StartStreamMessage: Codable {
         case bitrate
         case streamScale
         case latencyMode
+        case audioConfiguration
         case maxRefreshRate
     }
 
@@ -104,6 +107,7 @@ package struct StartStreamMessage: Codable {
         bitrate: Int? = nil,
         streamScale: CGFloat? = nil,
         latencyMode: MirageStreamLatencyMode? = nil,
+        audioConfiguration: MirageAudioConfiguration? = nil,
         maxRefreshRate: Int = 60
     ) {
         self.windowID = windowID
@@ -120,6 +124,7 @@ package struct StartStreamMessage: Codable {
         self.bitrate = bitrate
         self.streamScale = streamScale
         self.latencyMode = latencyMode
+        self.audioConfiguration = audioConfiguration
         self.maxRefreshRate = maxRefreshRate
     }
 }

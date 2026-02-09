@@ -79,6 +79,16 @@ public final class MirageHostService {
 
     // UDP connections by stream ID (received from client registrations)
     var udpConnectionsByStream: [StreamID: NWConnection] = [:]
+    // Audio UDP connections by client ID (single mixed audio stream per client).
+    var audioConnectionsByClientID: [UUID: NWConnection] = [:]
+    // Active host audio pipelines by client ID.
+    var audioPipelinesByClientID: [UUID: HostAudioPipeline] = [:]
+    // Selected source stream for client audio capture.
+    var audioSourceStreamByClientID: [UUID: StreamID] = [:]
+    // Latest requested audio configuration by client.
+    var audioConfigurationByClientID: [UUID: MirageAudioConfiguration] = [:]
+    // Last audio streamStarted payload sent to each client.
+    var audioStartedMessageByClientID: [UUID: AudioStreamStartedMessage] = [:]
     var minimumSizesByWindowID: [WindowID: CGSize] = [:]
     var streamStartupBaseTimes: [StreamID: CFAbsoluteTime] = [:]
     var streamStartupRegistrationLogged: Set<StreamID> = []
@@ -189,7 +199,15 @@ public final class MirageHostService {
     /// Optional override for host lock behavior (defaults to CGSession if nil).
     public var lockHostHandler: (@MainActor () -> Void)?
 
+    /// Whether host output stays muted while host audio streaming is active.
+    public var muteLocalAudioWhileStreaming: Bool = false {
+        didSet {
+            updateHostAudioMuteState()
+        }
+    }
+
     @ObservationIgnored let lightsOutController = HostLightsOutController()
+    @ObservationIgnored let hostAudioMuteController = HostAudioMuteController()
 
     // MARK: - Fast Input Path (bypasses MainActor)
 
@@ -309,6 +327,10 @@ public final class MirageHostService {
     /// Resolve the current virtual display bounds for secondary desktop streaming.
     /// Uses CoreGraphics coordinates for input injection.
     func resolveDesktopDisplayBounds() -> CGRect? {
+        if let cached = desktopDisplayBounds, cached.width > 0, cached.height > 0 {
+            return cached
+        }
+
         guard let displayID = desktopVirtualDisplayID else { return desktopDisplayBounds }
         let bounds = CGDisplayBounds(displayID)
         if bounds.width > 0, bounds.height > 0 { return bounds }

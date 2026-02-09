@@ -28,6 +28,7 @@ extension MirageHostService {
         captureQueueDepth: Int?,
         bitrate: Int?,
         streamScale: CGFloat?,
+        audioConfiguration: MirageAudioConfiguration,
         latencyMode: MirageStreamLatencyMode = .smoothest,
         dataPort _: UInt16?,
         targetFrameRate: Int? = nil
@@ -124,10 +125,8 @@ extension MirageHostService {
         let captureResolution = context.resolution
 
         desktopVirtualDisplayID = context.displayID
-        var resolvedBounds = resolveDesktopDisplayBounds()
-        if resolvedBounds == nil {
-            resolvedBounds = await SharedVirtualDisplayManager.shared.getDisplayBounds()
-        }
+        var resolvedBounds = await SharedVirtualDisplayManager.shared.getDisplayBounds()
+        if resolvedBounds == nil { resolvedBounds = resolveDesktopDisplayBounds() }
         guard let bounds = resolvedBounds else {
             throw MirageError.protocolError("Desktop stream display exists but couldn't get bounds")
         }
@@ -199,6 +198,11 @@ extension MirageHostService {
         desktopStreamID = streamID
         desktopStreamClientContext = clientContext
         streamsByID[streamID] = streamContext
+        await activateAudioForClient(
+            clientID: clientContext.client.id,
+            sourceStreamID: streamID,
+            configuration: audioConfiguration
+        )
 
         await updateLightsOutState()
         let excludedWindows = await resolveLightsOutExcludedWindows()
@@ -310,6 +314,7 @@ extension MirageHostService {
         streamStartupFirstPacketSent.remove(streamID)
         udpConnectionsByStream.removeValue(forKey: streamID)?.cancel()
         inputStreamCacheActor.remove(streamID)
+        await deactivateAudioSourceIfNeeded(streamID: streamID)
 
         if wasUsingVirtualDisplay { await SharedVirtualDisplayManager.shared.releaseDisplayForConsumer(.desktopStream) }
 

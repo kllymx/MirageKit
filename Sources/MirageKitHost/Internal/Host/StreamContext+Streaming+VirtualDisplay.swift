@@ -203,10 +203,12 @@ extension StreamContext {
             application: resolvedAppWrapper.application,
             display: resolvedDisplayWrapper.display,
             knownScaleFactor: 2.0,
-            outputScale: streamScale
-        ) { [weak self] frame in
-            self?.enqueueCapturedFrame(frame)
-        }
+            outputScale: streamScale,
+            onFrame: { [weak self] frame in
+                self?.enqueueCapturedFrame(frame)
+            },
+            onAudio: onCapturedAudioBuffer
+        )
         await refreshCaptureCadence()
 
         MirageLogger
@@ -308,10 +310,12 @@ extension StreamContext {
             application: resolvedAppWrapper.application,
             display: resolvedDisplayWrapper.display,
             knownScaleFactor: 2.0,
-            outputScale: streamScale
-        ) { [weak self] frame in
-            self?.enqueueCapturedFrame(frame)
-        }
+            outputScale: streamScale,
+            onFrame: { [weak self] frame in
+                self?.enqueueCapturedFrame(frame)
+            },
+            onAudio: onCapturedAudioBuffer
+        )
         await refreshCaptureCadence()
 
         await encoder?.forceKeyframe()

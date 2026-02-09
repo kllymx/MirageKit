@@ -174,6 +174,74 @@ public enum MiragePixelFormat: String, Sendable, CaseIterable, Codable {
     }
 }
 
+// MARK: - Audio Configuration
+
+/// Audio channel layout for streamed host audio.
+public enum MirageAudioChannelLayout: String, Sendable, CaseIterable, Codable {
+    case mono
+    case stereo
+    case surround51
+
+    public var channelCount: Int {
+        switch self {
+        case .mono: 1
+        case .stereo: 2
+        case .surround51: 6
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .mono: "Mono"
+        case .stereo: "Stereo"
+        case .surround51: "Surround (5.1)"
+        }
+    }
+}
+
+/// Audio quality mode for host audio streaming.
+public enum MirageAudioQuality: String, Sendable, CaseIterable, Codable {
+    case low
+    case high
+    case lossless
+
+    public var displayName: String {
+        switch self {
+        case .low: "Low"
+        case .high: "High"
+        case .lossless: "Lossless"
+        }
+    }
+}
+
+/// Wire codec used for audio packets.
+public enum MirageAudioCodec: UInt8, Sendable, Codable {
+    case aacLC = 1
+    case pcm16LE = 2
+}
+
+/// Client-selected audio streaming configuration.
+public struct MirageAudioConfiguration: Sendable, Codable, Equatable {
+    /// Whether host audio streaming is enabled.
+    public var enabled: Bool
+    /// Requested channel layout.
+    public var channelLayout: MirageAudioChannelLayout
+    /// Requested quality mode.
+    public var quality: MirageAudioQuality
+
+    public init(
+        enabled: Bool = true,
+        channelLayout: MirageAudioChannelLayout = .stereo,
+        quality: MirageAudioQuality = .high
+    ) {
+        self.enabled = enabled
+        self.channelLayout = channelLayout
+        self.quality = quality
+    }
+
+    public static let `default` = MirageAudioConfiguration()
+}
+
 // MARK: - Network Configuration
 
 /// Configuration for network connections

@@ -217,6 +217,7 @@ extension MirageClientService {
 
         // Clean up video resources.
         stopVideoConnection()
+        stopAudioConnection()
 
         let controllers = controllersByStream.values
         for controller in controllers {

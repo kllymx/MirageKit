@@ -73,6 +73,59 @@ struct MirageKitTests {
         #expect(decodedHello.deviceName == "Test Device")
     }
 
+    @Test("Audio control message serialization")
+    func audioControlMessageSerialization() throws {
+        let started = AudioStreamStartedMessage(
+            streamID: 42,
+            codec: .aacLC,
+            sampleRate: 48_000,
+            channelCount: 2
+        )
+        let startedEnvelope = try ControlMessage(type: .audioStreamStarted, content: started)
+        let (decodedStartedEnvelope, _) = try #require(ControlMessage.deserialize(from: startedEnvelope.serialize()))
+        #expect(decodedStartedEnvelope.type == .audioStreamStarted)
+        let decodedStarted = try decodedStartedEnvelope.decode(AudioStreamStartedMessage.self)
+        #expect(decodedStarted == started)
+
+        let stopped = AudioStreamStoppedMessage(streamID: 42, reason: .sourceStopped)
+        let stoppedEnvelope = try ControlMessage(type: .audioStreamStopped, content: stopped)
+        let (decodedStoppedEnvelope, _) = try #require(ControlMessage.deserialize(from: stoppedEnvelope.serialize()))
+        #expect(decodedStoppedEnvelope.type == .audioStreamStopped)
+        let decodedStopped = try decodedStoppedEnvelope.decode(AudioStreamStoppedMessage.self)
+        #expect(decodedStopped == stopped)
+    }
+
+    @Test("Audio packet header serialization")
+    func audioPacketHeaderSerialization() {
+        let header = AudioPacketHeader(
+            codec: .pcm16LE,
+            flags: [.discontinuity],
+            streamID: 7,
+            sequenceNumber: 12,
+            timestamp: 987_654_321,
+            frameNumber: 33,
+            fragmentIndex: 0,
+            fragmentCount: 1,
+            payloadLength: 256,
+            frameByteCount: 256,
+            sampleRate: 44_100,
+            channelCount: 2,
+            samplesPerFrame: 512,
+            checksum: 0xABCD_1234
+        )
+
+        let serialized = header.serialize()
+        #expect(serialized.count == mirageAudioHeaderSize)
+        let decoded = AudioPacketHeader.deserialize(from: serialized)
+        #expect(decoded != nil)
+        #expect(decoded?.codec == .pcm16LE)
+        #expect(decoded?.flags.contains(.discontinuity) == true)
+        #expect(decoded?.streamID == 7)
+        #expect(decoded?.sampleRate == 44_100)
+        #expect(decoded?.channelCount == 2)
+        #expect(decoded?.checksum == 0xABCD_1234)
+    }
+
     @Test("Stream encoder settings message serialization")
     func streamEncoderSettingsSerialization() throws {
         let request = StreamEncoderSettingsChangeMessage(

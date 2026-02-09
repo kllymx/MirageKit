@@ -28,12 +28,15 @@ extension WindowCaptureEngine {
         knownScaleFactor: CGFloat? = nil,
         outputScale: CGFloat = 1.0,
         onFrame: @escaping @Sendable (CapturedFrame) -> Void,
+        onAudio: (@Sendable (CapturedAudioBuffer) -> Void)? = nil,
         onDimensionChange: @escaping @Sendable (Int, Int) -> Void = { _, _ in }
     )
         async throws {
         guard !isCapturing else { throw MirageError.protocolError("Already capturing") }
+        restartGeneration &+= 1
 
         capturedFrameHandler = onFrame
+        capturedAudioHandler = onAudio
         dimensionChangeHandler = onDimensionChange
 
         currentDisplayRefreshRate = nil
@@ -104,6 +107,11 @@ extension WindowCaptureEngine {
 
         // Capture settings
         streamConfig.showsCursor = false // Don't capture cursor - iPad shows its own
+        streamConfig.capturesAudio = onAudio != nil
+        if onAudio != nil {
+            streamConfig.sampleRate = 48_000
+            streamConfig.channelCount = 2
+        }
         streamConfig.queueDepth = captureQueueDepth
         if let override = configuration.captureQueueDepth, override > 0 { MirageLogger.capture("Using capture queue depth override: \(streamConfig.queueDepth)") }
         let queueDepth = streamConfig.queueDepth
@@ -133,6 +141,7 @@ extension WindowCaptureEngine {
         let captureRate = effectiveCaptureRate()
         streamOutput = CaptureStreamOutput(
             onFrame: onFrame,
+            onAudio: onAudio,
             onKeyframeRequest: { [weak self] in
                 Task { await self?.markKeyframeRequested() }
             },
@@ -157,6 +166,13 @@ extension WindowCaptureEngine {
             type: .screen,
             sampleHandlerQueue: DispatchQueue(label: "com.mirage.capture.output", qos: .userInteractive)
         )
+        if onAudio != nil {
+            try stream.addStreamOutput(
+                streamOutput!,
+                type: .audio,
+                sampleHandlerQueue: DispatchQueue(label: "com.mirage.capture.audio", qos: .utility)
+            )
+        }
 
         // Start capturing
         try await stream.startCapture()
@@ -165,7 +181,26 @@ extension WindowCaptureEngine {
 
     /// Stop capturing
     func stopCapture() async {
-        guard isCapturing else { return }
+        await stopCapture(clearSessionState: true)
+    }
+
+    private func stopCapture(clearSessionState: Bool) async {
+        if clearSessionState { restartGeneration &+= 1 }
+        guard isCapturing else {
+            if clearSessionState {
+                stream = nil
+                streamOutput = nil
+                captureSessionConfig = nil
+                captureMode = nil
+                capturedFrameHandler = nil
+                capturedAudioHandler = nil
+                dimensionChangeHandler = nil
+                isRestarting = false
+            }
+            return
+        }
+
+        isCapturing = false
 
         do {
             try await stream?.stopCapture()
@@ -175,24 +210,44 @@ extension WindowCaptureEngine {
 
         stream = nil
         streamOutput = nil
-        capturedFrameHandler = nil
-        isCapturing = false
+        if clearSessionState {
+            captureSessionConfig = nil
+            captureMode = nil
+            capturedFrameHandler = nil
+            capturedAudioHandler = nil
+            dimensionChangeHandler = nil
+            isRestarting = false
+        }
     }
 
     private func restartCapture(reason: String) async {
         guard !isRestarting else { return }
         guard let config = captureSessionConfig, let mode = captureMode else { return }
+        guard isCapturing else { return }
         guard let onFrame = capturedFrameHandler else { return }
+        let onAudio = capturedAudioHandler
+        let onDimensionChange = dimensionChangeHandler ?? { _, _ in }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastRestartTime > restartCooldown else { return }
+        let restartGeneration = self.restartGeneration
 
         isRestarting = true
+        defer { isRestarting = false }
         lastRestartTime = now
         MirageLogger.capture("Restarting capture (\(reason))")
 
-        await stopCapture()
+        await stopCapture(clearSessionState: false)
+        guard restartGeneration == self.restartGeneration else {
+            MirageLogger.capture("Capture restart canceled (stream shutdown in progress)")
+            return
+        }
+
         let resolvedConfig = await resolveCaptureTargetsForRestart(config: config, mode: mode)
         captureSessionConfig = resolvedConfig
+        guard restartGeneration == self.restartGeneration else {
+            MirageLogger.capture("Capture restart canceled (stream shutdown in progress)")
+            return
+        }
 
         do {
             switch mode {
@@ -208,7 +263,8 @@ extension WindowCaptureEngine {
                     knownScaleFactor: resolvedConfig.knownScaleFactor,
                     outputScale: resolvedConfig.outputScale,
                     onFrame: onFrame,
-                    onDimensionChange: dimensionChangeHandler ?? { _, _ in }
+                    onAudio: onAudio,
+                    onDimensionChange: onDimensionChange
                 )
             case .display:
                 try await startDisplayCapture(
@@ -217,15 +273,14 @@ extension WindowCaptureEngine {
                     excludedWindows: resolvedConfig.excludedWindows,
                     showsCursor: resolvedConfig.showsCursor,
                     onFrame: onFrame,
-                    onDimensionChange: dimensionChangeHandler ?? { _, _ in }
+                    onAudio: onAudio,
+                    onDimensionChange: onDimensionChange
                 )
             }
             pendingKeyframeRequest = true
         } catch {
             MirageLogger.error(.capture, "Capture restart failed: \(error)")
         }
-
-        isRestarting = false
     }
 
     /// Start capturing an entire display (for login screen streaming)
@@ -243,12 +298,15 @@ extension WindowCaptureEngine {
         excludedWindows: [SCWindow] = [],
         showsCursor: Bool = true,
         onFrame: @escaping @Sendable (CapturedFrame) -> Void,
+        onAudio: (@Sendable (CapturedAudioBuffer) -> Void)? = nil,
         onDimensionChange: @escaping @Sendable (Int, Int) -> Void = { _, _ in }
     )
         async throws {
         guard !isCapturing else { throw MirageError.protocolError("Already capturing") }
+        restartGeneration &+= 1
 
         capturedFrameHandler = onFrame
+        capturedAudioHandler = onAudio
         dimensionChangeHandler = onDimensionChange
 
         // Create stream configuration for display capture
@@ -317,6 +375,11 @@ extension WindowCaptureEngine {
         // - Login screen: show cursor (true) for user interaction
         // - Desktop streaming: hide cursor (false) - client renders its own
         streamConfig.showsCursor = showsCursor
+        streamConfig.capturesAudio = onAudio != nil
+        if onAudio != nil {
+            streamConfig.sampleRate = 48_000
+            streamConfig.channelCount = 2
+        }
         streamConfig.queueDepth = captureQueueDepth
         if let override = configuration.captureQueueDepth, override > 0 { MirageLogger.capture("Using capture queue depth override: \(streamConfig.queueDepth)") }
         let queueDepth = streamConfig.queueDepth
@@ -354,6 +417,7 @@ extension WindowCaptureEngine {
         let captureRate = effectiveCaptureRate()
         streamOutput = CaptureStreamOutput(
             onFrame: onFrame,
+            onAudio: onAudio,
             onKeyframeRequest: { [weak self] in
                 Task { await self?.markKeyframeRequested() }
             },
@@ -377,6 +441,13 @@ extension WindowCaptureEngine {
             type: .screen,
             sampleHandlerQueue: DispatchQueue(label: "com.mirage.capture.output", qos: .userInteractive)
         )
+        if onAudio != nil {
+            try stream.addStreamOutput(
+                streamOutput!,
+                type: .audio,
+                sampleHandlerQueue: DispatchQueue(label: "com.mirage.capture.audio", qos: .utility)
+            )
+        }
 
         // Start capturing
         try await stream.startCapture()

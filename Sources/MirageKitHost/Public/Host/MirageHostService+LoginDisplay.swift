@@ -96,6 +96,14 @@ extension MirageHostService {
         loginDisplaySharedDisplayConsumerActive = false
 
         streamsByID[streamID] = context
+        if let connectedClient = connectedClients.first {
+            let configuration = audioConfigurationByClientID[connectedClient.id] ?? .default
+            await activateAudioForClient(
+                clientID: connectedClient.id,
+                sourceStreamID: streamID,
+                configuration: configuration
+            )
+        }
         stopLoginDisplayWatchdog()
         loginDisplayWatchdogStartTime = CFAbsoluteTimeGetCurrent()
         loginDisplayInputState.update(streamID: streamID, bounds: provisionalMainDisplayBounds())
@@ -113,6 +121,7 @@ extension MirageHostService {
             await context.stop()
             streamsByID.removeValue(forKey: streamID)
             udpConnectionsByStream.removeValue(forKey: streamID)?.cancel()
+            await deactivateAudioSourceIfNeeded(streamID: streamID)
             loginDisplayContext = nil
             loginDisplayStreamID = nil
             loginDisplayResolution = nil
@@ -232,6 +241,7 @@ extension MirageHostService {
         if !isBorrowed {
             streamsByID.removeValue(forKey: streamID)
             udpConnectionsByStream.removeValue(forKey: streamID)?.cancel()
+            await deactivateAudioSourceIfNeeded(streamID: streamID)
         }
 
         if loginDisplayPowerAssertionEnabled {

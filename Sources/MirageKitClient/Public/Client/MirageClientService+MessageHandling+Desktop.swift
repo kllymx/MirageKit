@@ -55,6 +55,7 @@ extension MirageClientService {
                     do {
                         if self.udpConnection == nil { try await self.startVideoConnection() }
                         try await self.sendStreamRegistration(streamID: streamID)
+                        await self.ensureAudioTransportRegistered(for: streamID)
                         MirageLogger.client("Registered for desktop stream video \(streamID)")
                         self.startStartupRegistrationRetry(streamID: streamID)
                     } catch {

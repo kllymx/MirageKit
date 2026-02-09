@@ -209,6 +209,8 @@ actor StreamContext {
 
     /// Callback for sending encoded packets
     var onEncodedPacket: (@Sendable (Data, FrameHeader, @escaping @Sendable () -> Void) -> Void)?
+    /// Callback for captured audio buffers from ScreenCaptureKit.
+    var onCapturedAudioBuffer: (@Sendable (CapturedAudioBuffer) -> Void)?
 
     /// Serializes packet fragmentation/sending to preserve frame order
     var packetSender: StreamPacketSender?

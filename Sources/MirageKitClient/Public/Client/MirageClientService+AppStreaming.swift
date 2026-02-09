@@ -32,6 +32,7 @@ public extension MirageClientService {
     ///   - displayResolution: Client's logical display size in points for virtual display sizing.
     ///   - keyFrameInterval: Optional keyframe interval in frames.
     ///   - encoderOverrides: Optional per-stream encoder overrides.
+    ///   - audioConfiguration: Optional per-stream audio overrides.
     // TODO: HDR support - requires proper virtual display EDR configuration.
     // ///   - preferHDR: Whether to request HDR streaming (Rec. 2020 with PQ).
     func selectApp(
@@ -39,7 +40,8 @@ public extension MirageClientService {
         scaleFactor: CGFloat? = nil,
         displayResolution: CGSize? = nil,
         keyFrameInterval: Int? = nil,
-        encoderOverrides: MirageEncoderOverrides? = nil
+        encoderOverrides: MirageEncoderOverrides? = nil,
+        audioConfiguration: MirageAudioConfiguration? = nil
         // preferHDR: Bool = false
     )
     async throws {
@@ -60,7 +62,8 @@ public extension MirageClientService {
             colorSpace: nil,
             bitrate: nil,
             streamScale: clampedStreamScale(),
-            latencyMode: latencyMode
+            latencyMode: latencyMode,
+            audioConfiguration: audioConfiguration ?? self.audioConfiguration
         )
         // TODO: HDR support - requires proper virtual display EDR configuration.
         // request.preferHDR = preferHDR

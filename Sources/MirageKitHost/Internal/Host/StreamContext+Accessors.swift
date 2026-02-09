@@ -29,6 +29,10 @@ extension StreamContext {
         metricsUpdateHandler = handler
     }
 
+    func setCapturedAudioHandler(_ handler: (@Sendable (CapturedAudioBuffer) -> Void)?) {
+        onCapturedAudioBuffer = handler
+    }
+
     func isUsingVirtualDisplay() -> Bool {
         useVirtualDisplay && virtualDisplayContext != nil
     }

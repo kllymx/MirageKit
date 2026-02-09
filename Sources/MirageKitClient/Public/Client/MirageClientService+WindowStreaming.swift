@@ -25,13 +25,15 @@ public extension MirageClientService {
     ///   - keyFrameInterval: Optional keyframe interval in frames. Higher = fewer lag spikes.
     ///     Examples: 600 (10 seconds @ 60fps), 300 (5 seconds @ 60fps).
     ///   - encoderOverrides: Optional per-stream encoder overrides.
+    ///   - audioConfiguration: Optional per-stream audio overrides.
     func startViewing(
         window: MirageWindow,
         expectedPixelSize: CGSize? = nil,
         scaleFactor: CGFloat? = nil,
         displayResolution: CGSize? = nil,
         keyFrameInterval: Int? = nil,
-        encoderOverrides: MirageEncoderOverrides? = nil
+        encoderOverrides: MirageEncoderOverrides? = nil,
+        audioConfiguration: MirageAudioConfiguration? = nil
     )
     async throws -> ClientStreamSession {
         guard case .connected = connectionState, let connection else { throw MirageError.protocolError("Not connected") }
@@ -62,6 +64,7 @@ public extension MirageClientService {
 
         request.streamScale = clampedStreamScale()
         request.latencyMode = latencyMode
+        request.audioConfiguration = audioConfiguration ?? self.audioConfiguration
         request.maxRefreshRate = getScreenMaxRefreshRate()
 
         let message = try ControlMessage(type: .startStream, content: request)

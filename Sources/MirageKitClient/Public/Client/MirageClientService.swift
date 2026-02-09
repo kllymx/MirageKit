@@ -158,6 +158,20 @@ public final class MirageClientService {
     var udpConnection: NWConnection?
     var hostDataPort: UInt16 = 0
 
+    // Audio receiving (dedicated low-priority UDP connection)
+    var audioConnection: NWConnection?
+    var audioRegisteredStreamID: StreamID?
+    var activeAudioStreamMessage: AudioStreamStartedMessage?
+    let audioJitterBuffer = AudioJitterBuffer(startupBufferSeconds: 0.150)
+    let audioDecoder = AudioDecoder()
+    @ObservationIgnored let audioPlaybackController = AudioPlaybackController()
+    public var audioConfiguration: MirageAudioConfiguration = .default {
+        didSet {
+            guard oldValue != audioConfiguration else { return }
+            if !audioConfiguration.enabled { stopAudioConnection() }
+        }
+    }
+
     /// Per-stream controllers for lifecycle management
     /// StreamController owns decoder, reassembler, and resize state machine
     var controllersByStream: [StreamID: StreamController] = [:]

@@ -164,6 +164,7 @@ extension MirageHostService {
         )
         clientsByConnection[ObjectIdentifier(connection)] = clientContext
         clientsByID[client.id] = clientContext
+        audioConfigurationByClientID[client.id] = .default
 
         connectedClients.append(client)
         delegate?.hostService(self, didConnectClient: client)

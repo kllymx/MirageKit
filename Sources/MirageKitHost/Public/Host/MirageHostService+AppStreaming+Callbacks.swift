@@ -70,6 +70,7 @@ extension MirageHostService {
         let streamScale = await existingContext?.getStreamScale() ?? 1.0
         let encoderSettings = await existingContext?.getEncoderSettings()
         let targetFrameRate = await existingContext?.getTargetFrameRate()
+        let audioConfiguration = audioConfigurationByClientID[session.clientID] ?? .default
         let usesVirtualDisplay = await existingContext?.isUsingVirtualDisplay() ?? false
         let sharedDisplayResolution: CGSize? = if usesVirtualDisplay {
             await SharedVirtualDisplayManager.shared.getDisplayBounds()?.size
@@ -101,7 +102,8 @@ extension MirageHostService {
                         pixelFormat: encoderSettings?.pixelFormat,
                         colorSpace: encoderSettings?.colorSpace,
                         captureQueueDepth: encoderSettings?.captureQueueDepth,
-                        bitrate: encoderSettings?.bitrate
+                        bitrate: encoderSettings?.bitrate,
+                        audioConfiguration: audioConfiguration
                     )
 
                     let isResizable = await appStreamManager.checkWindowResizability(
@@ -155,7 +157,8 @@ extension MirageHostService {
                 pixelFormat: encoderSettings?.pixelFormat,
                 colorSpace: encoderSettings?.colorSpace,
                 captureQueueDepth: encoderSettings?.captureQueueDepth,
-                bitrate: encoderSettings?.bitrate
+                bitrate: encoderSettings?.bitrate,
+                audioConfiguration: audioConfiguration
             )
 
             let isResizable = await appStreamManager.checkWindowResizability(

@@ -36,6 +36,8 @@ extension MirageHostService {
             await stopDesktopStream(reason: .clientRequested)
         }
 
+        await stopAudioForDisconnectedClient(client.id)
+
         // Remove client
         var removedConnectionID: ObjectIdentifier?
         if let key = clientsByConnection.first(where: { $0.value.client.id == client.id })?.key {
@@ -55,6 +57,8 @@ extension MirageHostService {
 
         stopSessionRefreshLoopIfIdle()
         if clientsByConnection.isEmpty {
+            // Force local output unmute when the host no longer has any active clients.
+            hostAudioMuteController.setMuted(false)
             singleClientConnectionID = nil
             await stopLoginDisplayStream(newState: sessionState)
             await cleanupSharedVirtualDisplayIfIdle()

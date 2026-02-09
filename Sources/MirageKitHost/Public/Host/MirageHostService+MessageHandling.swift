@@ -68,6 +68,7 @@ extension MirageHostService {
                 let bitrate = request.bitrate
                 let requestedScale = request.streamScale ?? 1.0
                 let latencyMode = request.latencyMode ?? .smoothest
+                let audioConfiguration = request.audioConfiguration ?? .default
                 MirageLogger
                     .host(
                         "Frame rate: \(targetFrameRate)fps (client max=\(clientMaxRefreshRate)Hz)"
@@ -85,7 +86,8 @@ extension MirageHostService {
                     pixelFormat: pixelFormat,
                     colorSpace: colorSpace,
                     captureQueueDepth: request.captureQueueDepth,
-                    bitrate: bitrate
+                    bitrate: bitrate,
+                    audioConfiguration: audioConfiguration
                 )
             } catch {
                 MirageLogger.error(.host, "Failed to handle startStream: \(error)")

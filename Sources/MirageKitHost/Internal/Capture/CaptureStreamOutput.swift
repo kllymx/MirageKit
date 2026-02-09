@@ -14,11 +14,13 @@ import MirageKit
 
 #if os(macOS)
 import AppKit
+import AudioToolbox
 import ScreenCaptureKit
 
 /// Stream output delegate
 final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let onFrame: @Sendable (CapturedFrame) -> Void
+    private let onAudio: (@Sendable (CapturedAudioBuffer) -> Void)?
     private let onKeyframeRequest: @Sendable () -> Void
     private let onCaptureStall: @Sendable (String) -> Void
     private let shouldDropFrame: (@Sendable () -> Bool)?
@@ -42,6 +44,8 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private var callbackDurationMaxMs: Double = 0
     private var callbackSampleCount: UInt64 = 0
     private var lastCallbackLogTime: CFAbsoluteTime = 0
+    private var audioBufferCount: UInt64 = 0
+    private var lastAudioLogTime: CFAbsoluteTime = 0
     private var stallSignaled: Bool = false
     private var lastStallTime: CFAbsoluteTime = 0
     private var lastContentRect: CGRect = .zero
@@ -89,6 +93,7 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
 
     init(
         onFrame: @escaping @Sendable (CapturedFrame) -> Void,
+        onAudio: (@Sendable (CapturedAudioBuffer) -> Void)? = nil,
         onKeyframeRequest: @escaping @Sendable () -> Void,
         onCaptureStall: @escaping @Sendable (String) -> Void = { _ in },
         shouldDropFrame: (@Sendable () -> Bool)? = nil,
@@ -102,6 +107,7 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         poolMinimumBufferCount: Int = 6
     ) {
         self.onFrame = onFrame
+        self.onAudio = onAudio
         self.onKeyframeRequest = onKeyframeRequest
         self.onCaptureStall = onCaptureStall
         self.shouldDropFrame = shouldDropFrame
@@ -191,7 +197,7 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         let (gapThreshold, configuredStallLimit) = expectationLock.withLock {
             (frameGapThreshold, stallThreshold)
         }
-        let stallLimit = windowID == 0 ? configuredStallLimit : max(configuredStallLimit, windowStallThreshold)
+        let stallLimit = max(configuredStallLimit, windowStallThreshold)
         let recentActivityWindow = max(2.0, min(6.0, stallLimit * 2.0))
         let anyGap = now - lastDeliveredFrameTime
         let completeGap = lastCompleteFrameTime > 0 ? now - lastCompleteFrameTime : anyGap
@@ -276,6 +282,13 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         let wallTime = CFAbsoluteTimeGetCurrent() // Timing: when SCK delivered the frame
         let captureTime = wallTime
 
+        if type == .audio {
+            emitAudio(sampleBuffer: sampleBuffer)
+            return
+        }
+
+        guard type == .screen else { return }
+
         // DIAGNOSTIC: Track frame delivery gaps to detect drag/menu freeze
         if lastFrameTime > 0 {
             let gap = captureTime - lastFrameTime
@@ -293,8 +306,6 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
             }
         }
         lastFrameTime = captureTime
-
-        guard type == .screen else { return }
 
         if diagnosticsEnabled {
             rawFrameWindowCount += 1
@@ -531,6 +542,90 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         callbackDurationMaxMs = 0
         callbackSampleCount = 0
         lastCallbackLogTime = now
+    }
+
+    private func emitAudio(sampleBuffer: CMSampleBuffer) {
+        guard let onAudio else { return }
+        guard CMSampleBufferIsValid(sampleBuffer) else { return }
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbdPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+            return
+        }
+
+        var bufferListSizeNeeded = 0
+        let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &bufferListSizeNeeded,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+            blockBufferOut: nil
+        )
+        guard sizeStatus == noErr, bufferListSizeNeeded > 0 else { return }
+
+        let bufferListStorage = UnsafeMutableRawPointer.allocate(
+            byteCount: bufferListSizeNeeded,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer {
+            bufferListStorage.deallocate()
+        }
+        let bufferList = bufferListStorage.bindMemory(to: AudioBufferList.self, capacity: 1)
+
+        var blockBuffer: CMBlockBuffer?
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: bufferList,
+            bufferListSize: bufferListSizeNeeded,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+            blockBufferOut: &blockBuffer
+        )
+        guard status == noErr else { return }
+
+        let buffers = UnsafeMutableAudioBufferListPointer(bufferList)
+        var totalBytes = 0
+        for buffer in buffers {
+            totalBytes += Int(buffer.mDataByteSize)
+        }
+        guard totalBytes > 0 else { return }
+
+        var pcmData = Data(capacity: totalBytes)
+        for buffer in buffers {
+            guard let source = buffer.mData, buffer.mDataByteSize > 0 else { continue }
+            pcmData.append(source.assumingMemoryBound(to: UInt8.self), count: Int(buffer.mDataByteSize))
+        }
+        guard !pcmData.isEmpty else { return }
+
+        let asbd = asbdPointer.pointee
+        let captured = CapturedAudioBuffer(
+            data: pcmData,
+            sampleRate: asbd.mSampleRate,
+            channelCount: Int(asbd.mChannelsPerFrame),
+            frameCount: max(0, CMSampleBufferGetNumSamples(sampleBuffer)),
+            bytesPerFrame: Int(asbd.mBytesPerFrame),
+            bitsPerChannel: Int(asbd.mBitsPerChannel),
+            isFloat: (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0,
+            isInterleaved: (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) == 0,
+            presentationTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        )
+        if MirageLogger.isEnabled(.capture) {
+            audioBufferCount += 1
+            let now = CFAbsoluteTimeGetCurrent()
+            if lastAudioLogTime == 0 || now - lastAudioLogTime > 2.0 {
+                MirageLogger
+                    .capture(
+                        "Audio capture: buffers=\(audioBufferCount), rate=\(Int(captured.sampleRate))Hz, channels=\(captured.channelCount), frames=\(captured.frameCount), interleaved=\(captured.isInterleaved)"
+                    )
+                audioBufferCount = 0
+                lastAudioLogTime = now
+            }
+        }
+        onAudio(captured)
     }
 
     private func emitFrame(

@@ -83,6 +83,7 @@ extension MirageHostService {
         let streamScale = await originalContext.getStreamScale()
         let encoderSettings = await originalContext.getEncoderSettings()
         let targetFrameRate = await originalContext.getTargetFrameRate()
+        let audioConfiguration = audioConfigurationByClientID[client.id] ?? .default
 
         // Auto-start a new stream for this window
         do {
@@ -97,7 +98,8 @@ extension MirageHostService {
                 pixelFormat: encoderSettings.pixelFormat,
                 colorSpace: encoderSettings.colorSpace,
                 captureQueueDepth: encoderSettings.captureQueueDepth,
-                bitrate: encoderSettings.bitrate
+                bitrate: encoderSettings.bitrate,
+                audioConfiguration: audioConfiguration
             )
             MirageLogger.host("Auto-started stream for new independent window \(window.id)")
         } catch {

@@ -37,6 +37,8 @@ package struct StartDesktopStreamMessage: Codable {
     package let streamScale: CGFloat?
     /// Client latency preference for buffering behavior
     package let latencyMode: MirageStreamLatencyMode?
+    /// Client audio streaming configuration
+    package let audioConfiguration: MirageAudioConfiguration?
     /// UDP port the client is listening on for video data
     package let dataPort: UInt16?
     /// Client refresh rate override in Hz (60/120 based on client capability)
@@ -58,6 +60,7 @@ package struct StartDesktopStreamMessage: Codable {
         case bitrate
         case streamScale
         case latencyMode
+        case audioConfiguration
         case dataPort
         case maxRefreshRate
     }
@@ -74,6 +77,7 @@ package struct StartDesktopStreamMessage: Codable {
         bitrate: Int? = nil,
         streamScale: CGFloat? = nil,
         latencyMode: MirageStreamLatencyMode? = nil,
+        audioConfiguration: MirageAudioConfiguration? = nil,
         dataPort: UInt16? = nil,
         maxRefreshRate: Int
     ) {
@@ -88,6 +92,7 @@ package struct StartDesktopStreamMessage: Codable {
         self.bitrate = bitrate
         self.streamScale = streamScale
         self.latencyMode = latencyMode
+        self.audioConfiguration = audioConfiguration
         self.dataPort = dataPort
         self.maxRefreshRate = maxRefreshRate
     }

@@ -105,6 +105,7 @@ extension MirageClientService {
                         if self.udpConnection == nil { try await self.startVideoConnection() }
 
                         try await self.sendStreamRegistration(streamID: streamID)
+                        await self.ensureAudioTransportRegistered(for: streamID)
                     } catch {
                         MirageLogger.error(.client, "Failed to establish video connection: \(error)")
                         self.registeredStreamIDs.remove(streamID)
@@ -298,6 +299,7 @@ extension MirageClientService {
                     do {
                         if self.udpConnection == nil { try await self.startVideoConnection() }
                         try await self.sendStreamRegistration(streamID: streamID)
+                        await self.ensureAudioTransportRegistered(for: streamID)
                         MirageLogger.client("Registered for login display video stream \(streamID)")
                     } catch {
                         MirageLogger.error(.client, "Failed to establish video connection for login display: \(error)")
