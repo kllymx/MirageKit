@@ -19,6 +19,7 @@ actor HEVCEncoder {
     var configuration: MirageEncoderConfiguration
     let latencyMode: MirageStreamLatencyMode
     var activePixelFormat: MiragePixelFormat
+    var activeProfileLevel: CFString?
     var supportedPropertyKeys: Set<CFString> = []
     var didQuerySupportedProperties = false
     var loggedUnsupportedKeys: Set<CFString> = []
@@ -75,14 +76,22 @@ actor HEVCEncoder {
         }
     }
 
-    var profileLevel: CFString {
-        switch activePixelFormat {
-        case .bgr10a2,
-             .p010:
-            kVTProfileLevel_HEVC_Main10_AutoLevel
+    var requestedProfileLevels: [CFString] {
+        Self.requestedProfileLevels(for: activePixelFormat)
+    }
+
+    static func requestedProfileLevels(for pixelFormat: MiragePixelFormat) -> [CFString] {
+        switch pixelFormat {
+        case .bgr10a2:
+            [
+                kVTProfileLevel_HEVC_Main42210_AutoLevel,
+                kVTProfileLevel_HEVC_Main10_AutoLevel,
+            ]
+        case .p010:
+            [kVTProfileLevel_HEVC_Main10_AutoLevel]
         case .bgra8,
              .nv12:
-            kVTProfileLevel_HEVC_Main_AutoLevel
+            [kVTProfileLevel_HEVC_Main_AutoLevel]
         }
     }
 

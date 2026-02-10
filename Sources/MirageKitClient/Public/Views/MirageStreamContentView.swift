@@ -317,6 +317,7 @@ public struct MirageStreamContentView: View {
         let effectiveScreenSize = (viewSize == .zero) ? fallbackScreenSize : viewSize
 
         Task { @MainActor [clientService] in
+            await Task.yield()
             guard allowsResizeEvents else { return }
 
             if session.hasReceivedFirstFrame {

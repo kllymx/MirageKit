@@ -76,6 +76,8 @@ public extension MirageClientService {
         } else {
             pendingAppAdaptiveFallbackBitrate = nil
         }
+        pendingAppAdaptiveFallbackFormat = request.pixelFormat
+        pendingAppAdaptiveFallbackColorSpace = request.colorSpace
 
         let message = try ControlMessage(type: .selectApp, content: request)
         connection.send(content: message.serialize(), completion: .idempotent)

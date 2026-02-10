@@ -92,6 +92,9 @@ extension HEVCEncoder {
             "NV12"
         }
         MirageLogger.encoder("Encoder input format: \(formatLabel)")
+        if let activeProfileLevel {
+            MirageLogger.encoder("Encoder profile: \(hevcProfileName(for: activeProfileLevel))")
+        }
     }
 
     private func qualitySettings(for quality: Float) -> QualitySettings {
@@ -155,7 +158,39 @@ extension HEVCEncoder {
         return String(scalars.map { Character($0) })
     }
 
-    func setProperty(_ session: VTCompressionSession, key: CFString, value: CFTypeRef) {
+    @discardableResult
+    func setProperty(_ session: VTCompressionSession, key: CFString, value: CFTypeRef) -> Bool {
+        if didQuerySupportedProperties, !supportedPropertyKeys.contains(key) {
+            if !loggedUnsupportedKeys.contains(key) {
+                loggedUnsupportedKeys.insert(key)
+                MirageLogger.encoder("Encoder property unsupported: \(key)")
+            }
+            return false
+        }
+        let status = VTSessionSetProperty(session, key: key, value: value)
+        guard status == noErr else {
+            MirageLogger.error(.encoder, "VTSessionSetProperty \(key) failed: \(status)")
+            return false
+        }
+        return true
+    }
+
+    func hevcProfileName(for profile: CFString) -> String {
+        if CFEqual(profile, kVTProfileLevel_HEVC_Main42210_AutoLevel) {
+            return "HEVC Main42210 (4:2:2)"
+        }
+        if CFEqual(profile, kVTProfileLevel_HEVC_Main10_AutoLevel) {
+            return "HEVC Main10 (4:2:0)"
+        }
+        if CFEqual(profile, kVTProfileLevel_HEVC_Main_AutoLevel) {
+            return "HEVC Main (4:2:0)"
+        }
+        return profile as String
+    }
+
+    func applyProfileLevel(_ session: VTCompressionSession) {
+        let key = kVTCompressionPropertyKey_ProfileLevel
+        activeProfileLevel = nil
         if didQuerySupportedProperties, !supportedPropertyKeys.contains(key) {
             if !loggedUnsupportedKeys.contains(key) {
                 loggedUnsupportedKeys.insert(key)
@@ -163,9 +198,26 @@ extension HEVCEncoder {
             }
             return
         }
-        let status = VTSessionSetProperty(session, key: key, value: value)
-        guard status == noErr else {
-            MirageLogger.error(.encoder, "VTSessionSetProperty \(key) failed: \(status)")
+
+        let candidates = requestedProfileLevels
+        for (index, profile) in candidates.enumerated() {
+            let status = VTSessionSetProperty(session, key: key, value: profile)
+            guard status == noErr else {
+                let keyName = key as String
+                let profileName = hevcProfileName(for: profile)
+                MirageLogger.error(
+                    .encoder,
+                    "VTSessionSetProperty \(keyName) failed for \(profileName): \(status)"
+                )
+                continue
+            }
+
+            activeProfileLevel = profile
+            if index > 0 {
+                let preferred = hevcProfileName(for: candidates[0])
+                let fallback = hevcProfileName(for: profile)
+                MirageLogger.encoder("Encoder profile fallback: \(preferred) -> \(fallback)")
+            }
             return
         }
     }
@@ -245,12 +297,8 @@ extension HEVCEncoder {
             value: intervalSeconds as CFNumber
         )
 
-        // Profile: Main10 for 10-bit, Main for 8-bit
-        setProperty(
-            session,
-            key: kVTCompressionPropertyKey_ProfileLevel,
-            value: profileLevel
-        )
+        // Profile selection. ARGB2101010 prefers Main42210 and falls back to Main10.
+        applyProfileLevel(session)
 
         // Prioritize encoding speed over quality for lower latency
         setProperty(

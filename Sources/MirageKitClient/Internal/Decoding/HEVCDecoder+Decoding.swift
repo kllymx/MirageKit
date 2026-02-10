@@ -100,6 +100,20 @@ extension HEVCDecoder {
             MirageLogger.decoder("IDR slice header (after strip): \(strippedHeader)")
         }
 
+        if !isValidLengthPrefixedHEVCBitstream(frameData) {
+            let now = CFAbsoluteTimeGetCurrent()
+            let shouldSignalRecovery = now - lastInvalidPayloadRecoveryTime >= invalidPayloadRecoveryCooldown
+            if shouldSignalRecovery { lastInvalidPayloadRecoveryTime = now }
+
+            if shouldSignalRecovery {
+                MirageLogger.decoder("Invalid AVCC payload - requesting keyframe recovery")
+                errorTracker?.recordError()
+            } else {
+                MirageLogger.decoder("Invalid AVCC payload - frame dropped")
+            }
+            return
+        }
+
         guard let formatDesc = formatDescription else {
             // No format description yet - silently drop all frames until we receive
             // a keyframe with valid VPS/SPS/PPS parameter sets

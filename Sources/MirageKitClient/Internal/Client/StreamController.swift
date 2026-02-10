@@ -93,6 +93,7 @@ actor StreamController {
     static let overloadRecoveryThreshold: Int = 2
     static let backpressureRecoveryCooldown: CFAbsoluteTime = 1.0
     static let adaptiveFallbackCooldown: CFAbsoluteTime = 15.0
+    static let recoveryRequestDispatchCooldown: CFAbsoluteTime = 0.5
 
     /// Pending resize debounce task
     var resizeDebounceTask: Task<Void, Never>?
@@ -118,6 +119,7 @@ actor StreamController {
     var lastQueueDropLogTime: CFAbsoluteTime = 0
     var queueDropTimestamps: [CFAbsoluteTime] = []
     var recoveryRequestTimestamps: [CFAbsoluteTime] = []
+    var lastRecoveryRequestDispatchTime: CFAbsoluteTime = 0
     var lastBackpressureRecoveryTime: CFAbsoluteTime = 0
     var lastAdaptiveFallbackSignalTime: CFAbsoluteTime = 0
 
@@ -190,6 +192,7 @@ actor StreamController {
     /// Start the controller - sets up decoder and reassembler callbacks
     func start() async {
         lastDecodedFrameTime = 0
+        lastRecoveryRequestDispatchTime = 0
         stopFreezeMonitor()
 
         // Set up error recovery - request keyframe when decode errors exceed threshold

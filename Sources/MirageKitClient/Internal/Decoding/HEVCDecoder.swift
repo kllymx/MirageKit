@@ -56,6 +56,10 @@ actor HEVCDecoder {
     /// Timeout for awaiting dimension change (seconds) before re-requesting keyframe
     let dimensionChangeTimeout: CFAbsoluteTime = 2.0
 
+    /// Minimum interval between invalid payload recovery signals.
+    let invalidPayloadRecoveryCooldown: CFAbsoluteTime = 1.0
+    var lastInvalidPayloadRecoveryTime: CFAbsoluteTime = 0
+
     /// Expected dimensions after resize (optional, for validation)
     var expectedDimensions: (width: Int, height: Int)?
 
@@ -245,6 +249,7 @@ final class FrameReassembler: @unchecked Sendable {
     var packetsDiscardedToken: UInt64 = 0
     var packetsDiscardedAwaitingKeyframe: UInt64 = 0
     var packetsDiscardedEpoch: UInt64 = 0
+    var packetsDiscardedDeliveredKeyframe: UInt64 = 0
     var lastStatsLog: UInt64 = 0
     let keyframeFECBlockSize: Int = 8
     let pFrameFECBlockSize: Int = 16

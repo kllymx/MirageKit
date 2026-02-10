@@ -55,7 +55,7 @@ extension FrameReassembler {
             lastStatsLog = totalPacketsReceived
             MirageLogger.log(
                 .frameAssembly,
-                "STATS: packets=\(totalPacketsReceived), framesDelivered=\(framesDelivered), pending=\(pendingFrames.count), discarded(old=\(packetsDiscardedOld), crc=\(packetsDiscardedCRC), token=\(packetsDiscardedToken), epoch=\(packetsDiscardedEpoch), awaitKeyframe=\(packetsDiscardedAwaitingKeyframe))"
+                "STATS: packets=\(totalPacketsReceived), framesDelivered=\(framesDelivered), pending=\(pendingFrames.count), discarded(old=\(packetsDiscardedOld), deliveredKeyframe=\(packetsDiscardedDeliveredKeyframe), crc=\(packetsDiscardedCRC), token=\(packetsDiscardedToken), epoch=\(packetsDiscardedEpoch), awaitKeyframe=\(packetsDiscardedAwaitingKeyframe))"
             )
         }
 
@@ -81,7 +81,11 @@ extension FrameReassembler {
         }
 
         if isKeyframePacket, isStaleKeyframeLocked(frameNumber) {
-            packetsDiscardedOld += 1
+            if lastDeliveredKeyframe > 0, frameNumber == lastDeliveredKeyframe {
+                packetsDiscardedDeliveredKeyframe += 1
+            } else {
+                packetsDiscardedOld += 1
+            }
             lock.unlock()
             return
         }
@@ -474,8 +478,9 @@ extension FrameReassembler {
 
     private func isStaleKeyframeLocked(_ frameNumber: UInt32) -> Bool {
         guard lastDeliveredKeyframe > 0 else { return false }
+        if frameNumber == lastDeliveredKeyframe { return true }
         guard frameNumber < lastDeliveredKeyframe else { return false }
-        return lastDeliveredKeyframe - frameNumber < 1000
+        return lastDeliveredKeyframe - frameNumber <= 1000
     }
 
     private func purgeStaleKeyframesLocked() {

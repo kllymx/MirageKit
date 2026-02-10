@@ -38,6 +38,7 @@ struct StreamControllerRecoveryTests {
             await controller.recordQueueDrop()
         }
         await controller.requestKeyframeRecovery(reason: "test-1")
+        try await Task.sleep(for: .milliseconds(550))
         await controller.requestKeyframeRecovery(reason: "test-2")
         try await Task.sleep(for: .milliseconds(100))
 

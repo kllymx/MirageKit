@@ -217,6 +217,29 @@ extension HEVCDecoder {
         return (vps, sps, pps)
     }
 
+    func isValidLengthPrefixedHEVCBitstream(_ data: Data) -> Bool {
+        guard !data.isEmpty else { return false }
+        if data.starts(with: [0x00, 0x00, 0x00, 0x01]) || data.starts(with: [0x00, 0x00, 0x01]) {
+            return false
+        }
+
+        var cursor = 0
+        let count = data.count
+        while cursor + 4 <= count {
+            let nalLength = Int(data[cursor]) << 24 |
+                Int(data[cursor + 1]) << 16 |
+                Int(data[cursor + 2]) << 8 |
+                Int(data[cursor + 3])
+            guard nalLength > 0 else { return false }
+
+            cursor += 4
+            guard cursor + nalLength <= count else { return false }
+            cursor += nalLength
+        }
+
+        return cursor == count
+    }
+
     private func updateFormatDescription(vpsData: Data, spsData: Data, ppsData: Data) throws {
         try vpsData.withUnsafeBytes { vpsPtr in
             try spsData.withUnsafeBytes { spsPtr in

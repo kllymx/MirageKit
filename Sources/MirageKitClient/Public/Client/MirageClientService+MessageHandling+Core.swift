@@ -127,8 +127,7 @@ extension MirageClientService {
             removeActiveStreamID(streamID)
             registeredStreamIDs.remove(streamID)
             clearStreamRefreshRateOverride(streamID: streamID)
-            adaptiveFallbackBitrateByStream.removeValue(forKey: streamID)
-            adaptiveFallbackLastAppliedTime.removeValue(forKey: streamID)
+            clearAdaptiveFallbackState(for: streamID)
 
             Task { [weak self] in
                 guard let self else { return }
@@ -149,6 +148,14 @@ extension MirageClientService {
                 idleEncodedFPS: metrics.idleEncodedFPS,
                 droppedFrames: metrics.droppedFrames,
                 activeQuality: Double(metrics.activeQuality),
+                targetFrameRate: metrics.targetFrameRate
+            )
+            updateAdaptiveFallbackPressure(
+                streamID: metrics.streamID,
+                targetFrameRate: metrics.targetFrameRate
+            )
+            updateAdaptiveFallbackRecovery(
+                streamID: metrics.streamID,
                 targetFrameRate: metrics.targetFrameRate
             )
 
@@ -177,6 +184,24 @@ extension MirageClientService {
                                 "Refresh override fallback requested for stream \(metrics.streamID): \(requested)Hz"
                             )
                         }
+                    }
+
+                    let forcedDowngradeThreshold = 8
+                    if requested == 120,
+                       metrics.targetFrameRate == 60,
+                       updatedCount >= forcedDowngradeThreshold {
+                        refreshRateOverridesByStream[metrics.streamID] = 60
+                        refreshRateMismatchCounts.removeValue(forKey: metrics.streamID)
+                        refreshRateFallbackTargets.removeValue(forKey: metrics.streamID)
+                        Task { [weak self] in
+                            try? await self?.sendStreamRefreshRateChange(
+                                streamID: metrics.streamID,
+                                maxRefreshRate: 60
+                            )
+                        }
+                        MirageLogger.client(
+                            "Refresh override downgraded to 60Hz for stream \(metrics.streamID) after sustained 120Hz mismatch"
+                        )
                     }
                 } else {
                     refreshRateMismatchCounts.removeValue(forKey: metrics.streamID)
@@ -334,8 +359,7 @@ extension MirageClientService {
             } else {
                 metricsStore.clear(streamID: streamID)
                 cursorStore.clear(streamID: streamID)
-                adaptiveFallbackBitrateByStream.removeValue(forKey: streamID)
-                adaptiveFallbackLastAppliedTime.removeValue(forKey: streamID)
+                clearAdaptiveFallbackState(for: streamID)
 
                 removeActiveStreamID(streamID)
                 registeredStreamIDs.remove(streamID)

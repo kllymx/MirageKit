@@ -66,6 +66,16 @@ public extension MirageClientService {
         } else {
             pendingAdaptiveFallbackBitrateByWindowID.removeValue(forKey: window.id)
         }
+        if let pixelFormat = request.pixelFormat {
+            pendingAdaptiveFallbackFormatByWindowID[window.id] = pixelFormat
+        } else {
+            pendingAdaptiveFallbackFormatByWindowID.removeValue(forKey: window.id)
+        }
+        if let colorSpace = request.colorSpace {
+            pendingAdaptiveFallbackColorSpaceByWindowID[window.id] = colorSpace
+        } else {
+            pendingAdaptiveFallbackColorSpaceByWindowID.removeValue(forKey: window.id)
+        }
 
         request.streamScale = clampedStreamScale()
         request.latencyMode = latencyMode
@@ -92,10 +102,15 @@ public extension MirageClientService {
         >) in
             self.streamStartedContinuation = continuation
         }
-        if let pendingBitrate = pendingAdaptiveFallbackBitrateByWindowID.removeValue(forKey: window.id) {
-            adaptiveFallbackBitrateByStream[realStreamID] = pendingBitrate
-        }
-        adaptiveFallbackLastAppliedTime[realStreamID] = 0
+        let pendingBitrate = pendingAdaptiveFallbackBitrateByWindowID.removeValue(forKey: window.id)
+        let pendingFormat = pendingAdaptiveFallbackFormatByWindowID.removeValue(forKey: window.id)
+        let pendingColorSpace = pendingAdaptiveFallbackColorSpaceByWindowID.removeValue(forKey: window.id)
+        configureAdaptiveFallbackBaseline(
+            for: realStreamID,
+            bitrate: pendingBitrate,
+            pixelFormat: pendingFormat,
+            colorSpace: pendingColorSpace
+        )
 
         MirageLogger.client("Stream started with ID \(realStreamID)")
 
@@ -127,10 +142,18 @@ public extension MirageClientService {
         let payloadSize = miragePayloadSize(maxPacketSize: networkConfig.maxPacketSize)
         let controller = StreamController(streamID: streamID, maxPayloadSize: payloadSize)
         controllersByStream[streamID] = controller
-        if adaptiveFallbackBitrateByStream[streamID] == nil,
-           let pendingAppAdaptiveFallbackBitrate,
-           pendingAppAdaptiveFallbackBitrate > 0 {
-            adaptiveFallbackBitrateByStream[streamID] = pendingAppAdaptiveFallbackBitrate
+        if adaptiveFallbackBaselineBitrateByStream[streamID] == nil,
+           adaptiveFallbackBaselineFormatByStream[streamID] == nil,
+           adaptiveFallbackBaselineColorSpaceByStream[streamID] == nil,
+           (pendingAppAdaptiveFallbackBitrate != nil ||
+                pendingAppAdaptiveFallbackFormat != nil ||
+                pendingAppAdaptiveFallbackColorSpace != nil) {
+            configureAdaptiveFallbackBaseline(
+                for: streamID,
+                bitrate: pendingAppAdaptiveFallbackBitrate,
+                pixelFormat: pendingAppAdaptiveFallbackFormat,
+                colorSpace: pendingAppAdaptiveFallbackColorSpace
+            )
         }
         adaptiveFallbackLastAppliedTime[streamID] = 0
 
@@ -218,8 +241,7 @@ public extension MirageClientService {
             await controller.stop()
             controllersByStream.removeValue(forKey: streamID)
         }
-        adaptiveFallbackBitrateByStream.removeValue(forKey: streamID)
-        adaptiveFallbackLastAppliedTime.removeValue(forKey: streamID)
+        clearAdaptiveFallbackState(for: streamID)
 
         await updateReassemblerSnapshot()
     }

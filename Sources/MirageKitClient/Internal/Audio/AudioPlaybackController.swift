@@ -190,7 +190,8 @@ final class AudioPlaybackController {
         if audioSessionConfigured { return true }
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, options: [.mixWithOthers])
+            // `.ambient` keeps third-party/background audio playing while Mirage output mixes in.
+            try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
             try session.setActive(true, options: [])
             audioSessionConfigured = true
             return true

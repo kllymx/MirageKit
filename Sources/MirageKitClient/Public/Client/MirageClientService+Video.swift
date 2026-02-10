@@ -315,6 +315,231 @@ extension MirageClientService {
             return
         }
 
+        switch adaptiveFallbackMode {
+        case .disabled:
+            MirageLogger.client("Adaptive fallback skipped (mode disabled) for stream \(streamID)")
+        case .automatic:
+            handleAutomaticAdaptiveFallbackTrigger(for: streamID)
+        case .customTemporary:
+            handleCustomAdaptiveFallbackTrigger(for: streamID)
+        }
+    }
+
+    func configureAdaptiveFallbackBaseline(
+        for streamID: StreamID,
+        bitrate: Int?,
+        pixelFormat: MiragePixelFormat?,
+        colorSpace: MirageColorSpace?
+    ) {
+        if let bitrate, bitrate > 0 {
+            adaptiveFallbackBitrateByStream[streamID] = bitrate
+            adaptiveFallbackBaselineBitrateByStream[streamID] = bitrate
+        } else {
+            adaptiveFallbackBitrateByStream.removeValue(forKey: streamID)
+            adaptiveFallbackBaselineBitrateByStream.removeValue(forKey: streamID)
+        }
+        if let pixelFormat {
+            adaptiveFallbackCurrentFormatByStream[streamID] = pixelFormat
+            adaptiveFallbackBaselineFormatByStream[streamID] = pixelFormat
+        } else {
+            adaptiveFallbackCurrentFormatByStream.removeValue(forKey: streamID)
+            adaptiveFallbackBaselineFormatByStream.removeValue(forKey: streamID)
+        }
+        if let colorSpace {
+            adaptiveFallbackCurrentColorSpaceByStream[streamID] = colorSpace
+            adaptiveFallbackBaselineColorSpaceByStream[streamID] = colorSpace
+        } else {
+            adaptiveFallbackCurrentColorSpaceByStream.removeValue(forKey: streamID)
+            adaptiveFallbackBaselineColorSpaceByStream.removeValue(forKey: streamID)
+        }
+
+        adaptiveFallbackCollapseTimestampsByStream[streamID] = []
+        adaptiveFallbackPressureCountByStream[streamID] = 0
+        adaptiveFallbackLastPressureTriggerTimeByStream.removeValue(forKey: streamID)
+        adaptiveFallbackStableSinceByStream.removeValue(forKey: streamID)
+        adaptiveFallbackLastRestoreTimeByStream.removeValue(forKey: streamID)
+        adaptiveFallbackLastCollapseTimeByStream.removeValue(forKey: streamID)
+        adaptiveFallbackLastAppliedTime[streamID] = 0
+    }
+
+    func clearAdaptiveFallbackState(for streamID: StreamID) {
+        adaptiveFallbackBitrateByStream.removeValue(forKey: streamID)
+        adaptiveFallbackBaselineBitrateByStream.removeValue(forKey: streamID)
+        adaptiveFallbackCurrentFormatByStream.removeValue(forKey: streamID)
+        adaptiveFallbackBaselineFormatByStream.removeValue(forKey: streamID)
+        adaptiveFallbackCurrentColorSpaceByStream.removeValue(forKey: streamID)
+        adaptiveFallbackBaselineColorSpaceByStream.removeValue(forKey: streamID)
+        adaptiveFallbackCollapseTimestampsByStream.removeValue(forKey: streamID)
+        adaptiveFallbackPressureCountByStream.removeValue(forKey: streamID)
+        adaptiveFallbackLastPressureTriggerTimeByStream.removeValue(forKey: streamID)
+        adaptiveFallbackStableSinceByStream.removeValue(forKey: streamID)
+        adaptiveFallbackLastRestoreTimeByStream.removeValue(forKey: streamID)
+        adaptiveFallbackLastCollapseTimeByStream.removeValue(forKey: streamID)
+        adaptiveFallbackLastAppliedTime.removeValue(forKey: streamID)
+    }
+
+    func updateAdaptiveFallbackPressure(streamID: StreamID, targetFrameRate: Int) {
+        guard adaptiveFallbackEnabled, adaptiveFallbackMode == .customTemporary else {
+            adaptiveFallbackPressureCountByStream.removeValue(forKey: streamID)
+            adaptiveFallbackLastPressureTriggerTimeByStream.removeValue(forKey: streamID)
+            return
+        }
+        guard let snapshot = metricsStore.snapshot(for: streamID), snapshot.hasHostMetrics else { return }
+
+        let targetFPS = Double(max(1, targetFrameRate))
+        let hostEncodedFPS = max(0.0, snapshot.hostEncodedFPS)
+        let underTargetThreshold = targetFPS * adaptiveFallbackPressureUnderTargetRatio
+        guard hostEncodedFPS > 0.0, hostEncodedFPS < underTargetThreshold else {
+            adaptiveFallbackPressureCountByStream.removeValue(forKey: streamID)
+            return
+        }
+
+        let receivedFPS = max(0.0, snapshot.receivedFPS)
+        let decodedFPS = max(0.0, snapshot.decodedFPS)
+        let transportBound = receivedFPS > hostEncodedFPS + adaptiveFallbackPressureHeadroomFPS
+        let decodeBound = decodedFPS > receivedFPS + adaptiveFallbackPressureHeadroomFPS
+        guard !transportBound, !decodeBound else {
+            adaptiveFallbackPressureCountByStream.removeValue(forKey: streamID)
+            return
+        }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let lastTrigger = adaptiveFallbackLastPressureTriggerTimeByStream[streamID] ?? 0
+        if lastTrigger > 0, now - lastTrigger < adaptiveFallbackPressureTriggerCooldown {
+            return
+        }
+
+        let nextCount = (adaptiveFallbackPressureCountByStream[streamID] ?? 0) + 1
+        adaptiveFallbackPressureCountByStream[streamID] = nextCount
+        guard nextCount >= adaptiveFallbackPressureTriggerCount else { return }
+
+        adaptiveFallbackPressureCountByStream[streamID] = 0
+        adaptiveFallbackLastPressureTriggerTimeByStream[streamID] = now
+        let hostText = hostEncodedFPS.formatted(.number.precision(.fractionLength(1)))
+        let targetText = targetFPS.formatted(.number.precision(.fractionLength(1)))
+        MirageLogger.client(
+            "Adaptive fallback trigger (encode pressure): host \(hostText)fps vs target \(targetText)fps for stream \(streamID)"
+        )
+        handleAdaptiveFallbackTrigger(for: streamID)
+    }
+
+    func updateAdaptiveFallbackRecovery(streamID: StreamID, targetFrameRate: Int) {
+        guard adaptiveFallbackEnabled, adaptiveFallbackMode == .customTemporary else { return }
+
+        let baselineFormat = adaptiveFallbackBaselineFormatByStream[streamID]
+        let currentFormat = adaptiveFallbackCurrentFormatByStream[streamID]
+        let baselineBitrate = adaptiveFallbackBaselineBitrateByStream[streamID]
+        let currentBitrate = adaptiveFallbackBitrateByStream[streamID]
+
+        let formatDegraded = if let baselineFormat, let currentFormat {
+            currentFormat != baselineFormat
+        } else {
+            false
+        }
+        let bitrateDegraded = if let baselineBitrate, let currentBitrate {
+            currentBitrate < baselineBitrate
+        } else {
+            false
+        }
+        guard formatDegraded || bitrateDegraded else {
+            adaptiveFallbackStableSinceByStream.removeValue(forKey: streamID)
+            return
+        }
+
+        guard let snapshot = metricsStore.snapshot(for: streamID) else {
+            adaptiveFallbackStableSinceByStream.removeValue(forKey: streamID)
+            return
+        }
+
+        let targetFPS = max(1, targetFrameRate)
+        let decodedFPS = max(0, snapshot.decodedFPS)
+        let receivedFPS = max(0, snapshot.receivedFPS)
+        let effectiveFPS: Double = if decodedFPS > 0, receivedFPS > 0 {
+            min(decodedFPS, receivedFPS)
+        } else {
+            max(decodedFPS, receivedFPS)
+        }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let lastCollapse = adaptiveFallbackLastCollapseTimeByStream[streamID] ?? 0
+        if lastCollapse > 0, now - lastCollapse < customAdaptiveFallbackRestoreWindow {
+            adaptiveFallbackStableSinceByStream.removeValue(forKey: streamID)
+            return
+        }
+
+        let stabilityThreshold = Double(targetFPS) * 0.90
+        guard effectiveFPS >= stabilityThreshold else {
+            adaptiveFallbackStableSinceByStream.removeValue(forKey: streamID)
+            return
+        }
+
+        if adaptiveFallbackStableSinceByStream[streamID] == nil {
+            adaptiveFallbackStableSinceByStream[streamID] = now
+            return
+        }
+        let stableSince = adaptiveFallbackStableSinceByStream[streamID] ?? now
+        guard now - stableSince >= customAdaptiveFallbackRestoreWindow else { return }
+
+        let lastRestore = adaptiveFallbackLastRestoreTimeByStream[streamID] ?? 0
+        guard lastRestore == 0 || now - lastRestore >= customAdaptiveFallbackRestoreWindow else { return }
+
+        if bitrateDegraded,
+           let baselineBitrate,
+           let currentBitrate {
+            let stepped = Int((Double(currentBitrate) * adaptiveRestoreBitrateStep).rounded(.down))
+            let nextBitrate = min(baselineBitrate, max(currentBitrate + 1, stepped))
+            guard nextBitrate > currentBitrate else { return }
+
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await sendStreamEncoderSettingsChange(streamID: streamID, bitrate: nextBitrate)
+                    adaptiveFallbackBitrateByStream[streamID] = nextBitrate
+                    adaptiveFallbackLastAppliedTime[streamID] = CFAbsoluteTimeGetCurrent()
+                    adaptiveFallbackLastRestoreTimeByStream[streamID] = CFAbsoluteTimeGetCurrent()
+                    adaptiveFallbackStableSinceByStream[streamID] = CFAbsoluteTimeGetCurrent()
+                    let fromMbps = (Double(currentBitrate) / 1_000_000.0)
+                        .formatted(.number.precision(.fractionLength(1)))
+                    let toMbps = (Double(nextBitrate) / 1_000_000.0)
+                        .formatted(.number.precision(.fractionLength(1)))
+                    MirageLogger.client("Adaptive restore bitrate step \(fromMbps) → \(toMbps) Mbps for stream \(streamID)")
+                } catch {
+                    MirageLogger.error(.client, "Failed to restore bitrate for stream \(streamID): \(error)")
+                }
+            }
+            return
+        }
+
+        if formatDegraded,
+           let baselineFormat,
+           let currentFormat,
+           let nextFormat = nextCustomRestorePixelFormat(current: currentFormat, baseline: baselineFormat) {
+            let colorSpace = adaptiveFallbackCurrentColorSpaceByStream[streamID] ??
+                adaptiveFallbackBaselineColorSpaceByStream[streamID]
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await sendStreamEncoderSettingsChange(
+                        streamID: streamID,
+                        pixelFormat: nextFormat,
+                        colorSpace: colorSpace
+                    )
+                    adaptiveFallbackCurrentFormatByStream[streamID] = nextFormat
+                    adaptiveFallbackLastAppliedTime[streamID] = CFAbsoluteTimeGetCurrent()
+                    adaptiveFallbackLastRestoreTimeByStream[streamID] = CFAbsoluteTimeGetCurrent()
+                    adaptiveFallbackStableSinceByStream[streamID] = CFAbsoluteTimeGetCurrent()
+                    MirageLogger
+                        .client(
+                            "Adaptive restore format step \(currentFormat.displayName) → \(nextFormat.displayName) for stream \(streamID)"
+                        )
+                } catch {
+                    MirageLogger.error(.client, "Failed to restore format for stream \(streamID): \(error)")
+                }
+            }
+        }
+    }
+
+    private func handleAutomaticAdaptiveFallbackTrigger(for streamID: StreamID) {
         let now = CFAbsoluteTimeGetCurrent()
         let lastApplied = adaptiveFallbackLastAppliedTime[streamID] ?? 0
         if lastApplied > 0, now - lastApplied < adaptiveFallbackCooldown {
@@ -352,6 +577,117 @@ extension MirageClientService {
             } catch {
                 MirageLogger.error(.client, "Failed to apply adaptive fallback for stream \(streamID): \(error)")
             }
+        }
+    }
+
+    private func handleCustomAdaptiveFallbackTrigger(for streamID: StreamID) {
+        let now = CFAbsoluteTimeGetCurrent()
+        var collapseTimes = adaptiveFallbackCollapseTimestampsByStream[streamID] ?? []
+        collapseTimes.append(now)
+        collapseTimes.removeAll { now - $0 > customAdaptiveFallbackCollapseWindow }
+        adaptiveFallbackCollapseTimestampsByStream[streamID] = collapseTimes
+        adaptiveFallbackLastCollapseTimeByStream[streamID] = now
+        adaptiveFallbackStableSinceByStream.removeValue(forKey: streamID)
+
+        guard collapseTimes.count >= customAdaptiveFallbackCollapseThreshold else {
+            MirageLogger
+                .client(
+                    "Adaptive fallback collapse observed (\(collapseTimes.count)/\(customAdaptiveFallbackCollapseThreshold)) for stream \(streamID)"
+                )
+            return
+        }
+
+        let lastApplied = adaptiveFallbackLastAppliedTime[streamID] ?? 0
+        if lastApplied > 0, now - lastApplied < adaptiveFallbackCooldown {
+            let remainingMs = Int(((adaptiveFallbackCooldown - (now - lastApplied)) * 1000).rounded())
+            MirageLogger.client("Adaptive fallback cooldown \(remainingMs)ms for stream \(streamID)")
+            return
+        }
+
+        if let currentFormat = adaptiveFallbackCurrentFormatByStream[streamID],
+           let nextFormat = nextCustomFallbackPixelFormat(currentFormat) {
+            let colorSpace = adaptiveFallbackCurrentColorSpaceByStream[streamID]
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await sendStreamEncoderSettingsChange(
+                        streamID: streamID,
+                        pixelFormat: nextFormat,
+                        colorSpace: colorSpace
+                    )
+                    adaptiveFallbackCurrentFormatByStream[streamID] = nextFormat
+                    adaptiveFallbackLastAppliedTime[streamID] = CFAbsoluteTimeGetCurrent()
+                    let currentName = currentFormat.displayName
+                    let nextName = nextFormat.displayName
+                    MirageLogger.client("Adaptive fallback format step \(currentName) → \(nextName) for stream \(streamID)")
+                } catch {
+                    MirageLogger.error(.client, "Failed to apply fallback format for stream \(streamID): \(error)")
+                }
+            }
+            return
+        }
+
+        guard let currentBitrate = adaptiveFallbackBitrateByStream[streamID], currentBitrate > 0 else {
+            MirageLogger.client("Adaptive fallback skipped (missing current bitrate) for stream \(streamID)")
+            return
+        }
+        guard let nextBitrate = Self.nextAdaptiveFallbackBitrate(
+            currentBitrate: currentBitrate,
+            step: adaptiveFallbackBitrateStep,
+            floor: adaptiveFallbackBitrateFloorBps
+        ) else {
+            let floorText = Double(adaptiveFallbackBitrateFloorBps / 1_000_000)
+                .formatted(.number.precision(.fractionLength(1)))
+            MirageLogger.client("Adaptive fallback floor reached (\(floorText) Mbps) for stream \(streamID)")
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await sendStreamEncoderSettingsChange(streamID: streamID, bitrate: nextBitrate)
+                adaptiveFallbackBitrateByStream[streamID] = nextBitrate
+                adaptiveFallbackLastAppliedTime[streamID] = CFAbsoluteTimeGetCurrent()
+                let fromMbps = (Double(currentBitrate) / 1_000_000.0)
+                    .formatted(.number.precision(.fractionLength(1)))
+                let toMbps = (Double(nextBitrate) / 1_000_000.0)
+                    .formatted(.number.precision(.fractionLength(1)))
+                MirageLogger.client("Adaptive fallback bitrate step \(fromMbps) → \(toMbps) Mbps for stream \(streamID)")
+            } catch {
+                MirageLogger.error(.client, "Failed to apply adaptive fallback for stream \(streamID): \(error)")
+            }
+        }
+    }
+
+    private func nextCustomFallbackPixelFormat(_ current: MiragePixelFormat) -> MiragePixelFormat? {
+        switch current {
+        case .bgr10a2,
+             .bgra8:
+            .p010
+        case .p010:
+            .nv12
+        case .nv12:
+            nil
+        }
+    }
+
+    private func nextCustomRestorePixelFormat(
+        current: MiragePixelFormat,
+        baseline: MiragePixelFormat
+    )
+    -> MiragePixelFormat? {
+        if current == baseline { return nil }
+        switch current {
+        case .nv12:
+            if baseline == .p010 { return .p010 }
+            if baseline == .bgr10a2 || baseline == .bgra8 { return .p010 }
+            return nil
+        case .p010:
+            if baseline == .bgr10a2 || baseline == .bgra8 { return baseline }
+            return nil
+        case .bgr10a2,
+             .bgra8:
+            return nil
         }
     }
 

@@ -23,6 +23,12 @@ import AppKit
 @Observable
 @MainActor
 public final class MirageClientService {
+    public enum AdaptiveFallbackMode: Equatable, Sendable {
+        case disabled
+        case automatic
+        case customTemporary
+    }
+
     /// Current connection state
     public internal(set) var connectionState: ConnectionState = .disconnected
     /// Whether the host connection is awaiting manual approval
@@ -67,6 +73,7 @@ public final class MirageClientService {
 
     /// Enables automatic stream fallback when decode overload persists.
     public var adaptiveFallbackEnabled: Bool = true
+    public var adaptiveFallbackMode: AdaptiveFallbackMode = .automatic
 
     /// Optional refresh rate override sent to the host.
     public var maxRefreshRateOverride: Int?
@@ -311,12 +318,37 @@ public final class MirageClientService {
     var refreshRateFallbackTargets: [StreamID: Int] = [:]
 
     var adaptiveFallbackBitrateByStream: [StreamID: Int] = [:]
+    var adaptiveFallbackBaselineBitrateByStream: [StreamID: Int] = [:]
+    var adaptiveFallbackCurrentFormatByStream: [StreamID: MiragePixelFormat] = [:]
+    var adaptiveFallbackBaselineFormatByStream: [StreamID: MiragePixelFormat] = [:]
+    var adaptiveFallbackCurrentColorSpaceByStream: [StreamID: MirageColorSpace] = [:]
+    var adaptiveFallbackBaselineColorSpaceByStream: [StreamID: MirageColorSpace] = [:]
+    var adaptiveFallbackCollapseTimestampsByStream: [StreamID: [CFAbsoluteTime]] = [:]
+    var adaptiveFallbackPressureCountByStream: [StreamID: Int] = [:]
+    var adaptiveFallbackLastPressureTriggerTimeByStream: [StreamID: CFAbsoluteTime] = [:]
+    var adaptiveFallbackStableSinceByStream: [StreamID: CFAbsoluteTime] = [:]
+    var adaptiveFallbackLastRestoreTimeByStream: [StreamID: CFAbsoluteTime] = [:]
+    var adaptiveFallbackLastCollapseTimeByStream: [StreamID: CFAbsoluteTime] = [:]
     var adaptiveFallbackLastAppliedTime: [StreamID: CFAbsoluteTime] = [:]
     var pendingAdaptiveFallbackBitrateByWindowID: [WindowID: Int] = [:]
+    var pendingAdaptiveFallbackFormatByWindowID: [WindowID: MiragePixelFormat] = [:]
+    var pendingAdaptiveFallbackColorSpaceByWindowID: [WindowID: MirageColorSpace] = [:]
     var pendingDesktopAdaptiveFallbackBitrate: Int?
+    var pendingDesktopAdaptiveFallbackFormat: MiragePixelFormat?
+    var pendingDesktopAdaptiveFallbackColorSpace: MirageColorSpace?
     var pendingAppAdaptiveFallbackBitrate: Int?
+    var pendingAppAdaptiveFallbackFormat: MiragePixelFormat?
+    var pendingAppAdaptiveFallbackColorSpace: MirageColorSpace?
     let adaptiveFallbackCooldown: CFAbsoluteTime = 15.0
+    let customAdaptiveFallbackCollapseWindow: CFAbsoluteTime = 20.0
+    let customAdaptiveFallbackCollapseThreshold: Int = 2
+    let customAdaptiveFallbackRestoreWindow: CFAbsoluteTime = 20.0
+    let adaptiveFallbackPressureUnderTargetRatio: Double = 0.90
+    let adaptiveFallbackPressureHeadroomFPS: Double = 4.0
+    let adaptiveFallbackPressureTriggerCount: Int = 2
+    let adaptiveFallbackPressureTriggerCooldown: CFAbsoluteTime = 2.0
     let adaptiveFallbackBitrateStep: Double = 0.85
+    let adaptiveRestoreBitrateStep: Double = 1.10
     let adaptiveFallbackBitrateFloorBps: Int = 8_000_000
 
     public enum ConnectionState: Equatable {

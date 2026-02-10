@@ -64,6 +64,12 @@ extension StreamController {
 
     func requestKeyframeRecovery(reason: String) async {
         let now = CFAbsoluteTimeGetCurrent()
+        if lastRecoveryRequestDispatchTime > 0,
+           now - lastRecoveryRequestDispatchTime < Self.recoveryRequestDispatchCooldown {
+            return
+        }
+        lastRecoveryRequestDispatchTime = now
+
         recoveryRequestTimestamps.append(now)
         trimOverloadWindow(now: now)
         maybeSignalAdaptiveFallback(now: now)

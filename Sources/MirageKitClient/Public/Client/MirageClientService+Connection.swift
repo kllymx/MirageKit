@@ -230,10 +230,27 @@ extension MirageClientService {
         streamStartupFirstRegistrationSent.removeAll()
         streamStartupFirstPacketReceived.removeAll()
         adaptiveFallbackBitrateByStream.removeAll()
+        adaptiveFallbackBaselineBitrateByStream.removeAll()
+        adaptiveFallbackCurrentFormatByStream.removeAll()
+        adaptiveFallbackBaselineFormatByStream.removeAll()
+        adaptiveFallbackCurrentColorSpaceByStream.removeAll()
+        adaptiveFallbackBaselineColorSpaceByStream.removeAll()
+        adaptiveFallbackCollapseTimestampsByStream.removeAll()
+        adaptiveFallbackPressureCountByStream.removeAll()
+        adaptiveFallbackLastPressureTriggerTimeByStream.removeAll()
+        adaptiveFallbackStableSinceByStream.removeAll()
+        adaptiveFallbackLastRestoreTimeByStream.removeAll()
+        adaptiveFallbackLastCollapseTimeByStream.removeAll()
         adaptiveFallbackLastAppliedTime.removeAll()
         pendingAdaptiveFallbackBitrateByWindowID.removeAll()
+        pendingAdaptiveFallbackFormatByWindowID.removeAll()
+        pendingAdaptiveFallbackColorSpaceByWindowID.removeAll()
         pendingDesktopAdaptiveFallbackBitrate = nil
+        pendingDesktopAdaptiveFallbackFormat = nil
+        pendingDesktopAdaptiveFallbackColorSpace = nil
         pendingAppAdaptiveFallbackBitrate = nil
+        pendingAppAdaptiveFallbackFormat = nil
+        pendingAppAdaptiveFallbackColorSpace = nil
         startupPacketPendingLock.withLock {
             startupPacketPendingStorage.removeAll()
         }
