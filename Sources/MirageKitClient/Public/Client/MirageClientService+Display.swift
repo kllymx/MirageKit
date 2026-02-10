@@ -306,14 +306,29 @@ extension MirageClientService {
     }
 
     private func liveScreenMetrics() -> ScreenMetrics {
-        let screen = UIScreen.main
-        let pointSize = screen.bounds.size
-        let nativePixelSize = orientedNativePixelSize(
-            nativeSize: screen.nativeBounds.size,
-            pointSize: pointSize
-        )
-        let scale = max(1.0, screen.scale)
-        let nativeScale = max(1.0, screen.nativeScale)
+        #if os(iOS)
+        if let screen = UIWindow.current?.windowScene?.screen ?? UIWindow.current?.screen {
+            let pointSize = screen.bounds.size
+            let nativePixelSize = orientedNativePixelSize(
+                nativeSize: screen.nativeBounds.size,
+                pointSize: pointSize
+            )
+            let scale = max(1.0, screen.scale)
+            let nativeScale = max(1.0, screen.nativeScale)
+
+            return ScreenMetrics(
+                pointSize: pointSize,
+                scale: scale,
+                nativePixelSize: nativePixelSize,
+                nativeScale: nativeScale
+            )
+        }
+        #endif
+
+        let pointSize = Self.lastKnownScreenPointSize.width > 0 ? Self.lastKnownScreenPointSize : Self.lastKnownViewSize
+        let scale = max(1.0, Self.lastKnownScreenScale)
+        let nativePixelSize = Self.lastKnownScreenNativePixelSize
+        let nativeScale = max(1.0, Self.lastKnownScreenNativeScale)
 
         return ScreenMetrics(
             pointSize: pointSize,

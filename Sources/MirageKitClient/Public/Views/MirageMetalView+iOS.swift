@@ -289,6 +289,29 @@ public class MirageMetalView: MTKView {
         onDrawableMetricsChanged?(currentDrawableMetrics(drawableSize: drawableSize))
     }
 
+    #if os(visionOS)
+    private func currentDrawableMetrics(drawableSize: CGSize) -> MirageDrawableMetrics {
+        let boundsSize = bounds.size
+        let scaleX = boundsSize.width > 0 ? drawableSize.width / boundsSize.width : 0
+        let scaleY = boundsSize.height > 0 ? drawableSize.height / boundsSize.height : 0
+        let scale = max(0.1, max(scaleX, scaleY))
+        let windowPointSize = window?.bounds.size ?? boundsSize
+        let screenScale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 1
+        let nativePixelSize = CGSize(
+            width: windowPointSize.width * screenScale,
+            height: windowPointSize.height * screenScale
+        )
+        return MirageDrawableMetrics(
+            pixelSize: drawableSize,
+            viewSize: boundsSize,
+            scaleFactor: scale,
+            screenPointSize: windowPointSize,
+            screenScale: screenScale,
+            screenNativePixelSize: nativePixelSize,
+            screenNativeScale: screenScale
+        )
+    }
+    #else
     private func currentDrawableMetrics(drawableSize: CGSize) -> MirageDrawableMetrics {
         let boundsSize = bounds.size
         let scaleX = boundsSize.width > 0 ? drawableSize.width / boundsSize.width : 0
@@ -324,6 +347,7 @@ public class MirageMetalView: MTKView {
 
         return CGSize(width: nativeSize.height, height: nativeSize.width)
     }
+    #endif
 
     private func cappedDrawableSize(_ size: CGSize) -> CGSize {
         guard size.width > 0, size.height > 0 else { return size }
