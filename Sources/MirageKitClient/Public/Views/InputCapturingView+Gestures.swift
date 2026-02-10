@@ -44,6 +44,10 @@ extension InputCapturingView {
 
         // Hover gesture for pointer movement tracking
         hoverGesture = UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:)))
+        hoverGesture.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.indirectPointer.rawValue),
+            NSNumber(value: UITouch.TouchType.pencil.rawValue),
+        ]
         addGestureRecognizer(hoverGesture)
 
         // Locked pointer gestures (indirect pointer only)
@@ -313,6 +317,10 @@ extension InputCapturingView {
 
     @objc
     func handleHover(_ gesture: UIHoverGestureRecognizer) {
+        let hoverStylus = stylusHoverEvent(from: gesture)
+        let stylusPayload = hoverStylus
+        let hoverPressure: CGFloat = stylusPayload == nil ? 1.0 : 0.0
+
         if cursorLockEnabled {
             guard !usesMouseInputDeltas else { return }
             let location = gesture.location(in: self)
@@ -336,7 +344,9 @@ extension InputCapturingView {
                         let mouseEvent = MirageMouseEvent(
                             button: .left,
                             location: lockedCursorPosition,
-                            modifiers: eventModifiers
+                            modifiers: eventModifiers,
+                            pressure: hoverPressure,
+                            stylus: stylusPayload
                         )
                         onInputEvent?(.mouseMoved(mouseEvent))
                     }
@@ -363,7 +373,13 @@ extension InputCapturingView {
             // Only send mouse moved if not dragging (pan gesture handles that)
             if !isDragging {
                 let eventModifiers = modifiers(from: gesture)
-                let mouseEvent = MirageMouseEvent(button: .left, location: location, modifiers: eventModifiers)
+                let mouseEvent = MirageMouseEvent(
+                    button: .left,
+                    location: location,
+                    modifiers: eventModifiers,
+                    pressure: hoverPressure,
+                    stylus: stylusPayload
+                )
                 onInputEvent?(.mouseMoved(mouseEvent))
             }
         default:
@@ -759,6 +775,15 @@ extension InputCapturingView {
 // MARK: - UIGestureRecognizerDelegate
 
 extension InputCapturingView: UIGestureRecognizerDelegate {
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard isStylusTouch(touch) else { return true }
+
+        // Route Pencil contact through dedicated touch handlers only.
+        // This prevents fallback long-press/pan gestures from flattening stylus data.
+        if gestureRecognizer is UIHoverGestureRecognizer { return true }
+        return false
+    }
+
     public func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer

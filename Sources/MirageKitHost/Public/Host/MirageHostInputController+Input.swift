@@ -50,41 +50,61 @@ extension MirageHostInputController {
                 flushPointerLerp()
                 injectMouseEvent(.otherMouseUp, e, windowFrame, windowID: window.id, app: window.application)
             case let .mouseMoved(e):
-                queuePointerLerp(
-                    .mouseMoved,
-                    e,
-                    windowFrame,
-                    windowID: window.id,
-                    app: window.application,
-                    isDesktop: false
-                )
+                if appliesTabletSubtype(e) {
+                    flushPointerLerp()
+                    injectMouseEvent(.mouseMoved, e, windowFrame, windowID: window.id, app: window.application)
+                } else {
+                    queuePointerLerp(
+                        .mouseMoved,
+                        e,
+                        windowFrame,
+                        windowID: window.id,
+                        app: window.application,
+                        isDesktop: false
+                    )
+                }
             case let .mouseDragged(e):
-                queuePointerLerp(
-                    .leftMouseDragged,
-                    e,
-                    windowFrame,
-                    windowID: window.id,
-                    app: window.application,
-                    isDesktop: false
-                )
+                if appliesTabletSubtype(e) {
+                    flushPointerLerp()
+                    injectMouseEvent(.leftMouseDragged, e, windowFrame, windowID: window.id, app: window.application)
+                } else {
+                    queuePointerLerp(
+                        .leftMouseDragged,
+                        e,
+                        windowFrame,
+                        windowID: window.id,
+                        app: window.application,
+                        isDesktop: false
+                    )
+                }
             case let .rightMouseDragged(e):
-                queuePointerLerp(
-                    .rightMouseDragged,
-                    e,
-                    windowFrame,
-                    windowID: window.id,
-                    app: window.application,
-                    isDesktop: false
-                )
+                if appliesTabletSubtype(e) {
+                    flushPointerLerp()
+                    injectMouseEvent(.rightMouseDragged, e, windowFrame, windowID: window.id, app: window.application)
+                } else {
+                    queuePointerLerp(
+                        .rightMouseDragged,
+                        e,
+                        windowFrame,
+                        windowID: window.id,
+                        app: window.application,
+                        isDesktop: false
+                    )
+                }
             case let .otherMouseDragged(e):
-                queuePointerLerp(
-                    .otherMouseDragged,
-                    e,
-                    windowFrame,
-                    windowID: window.id,
-                    app: window.application,
-                    isDesktop: false
-                )
+                if appliesTabletSubtype(e) {
+                    flushPointerLerp()
+                    injectMouseEvent(.otherMouseDragged, e, windowFrame, windowID: window.id, app: window.application)
+                } else {
+                    queuePointerLerp(
+                        .otherMouseDragged,
+                        e,
+                        windowFrame,
+                        windowID: window.id,
+                        app: window.application,
+                        isDesktop: false
+                    )
+                }
             case let .scrollWheel(e):
                 batchScroll(e, windowFrame, app: window.application)
             case let .keyDown(e):

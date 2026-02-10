@@ -25,8 +25,9 @@ public struct MirageStreamContentView: View {
     public let onHardwareKeyboardPresenceChanged: ((Bool) -> Void)?
     public let onSoftwareKeyboardVisibilityChanged: ((Bool) -> Void)?
     public let dockSnapEnabled: Bool
-    public let usesVirtualTrackpad: Bool
+    public let directTouchInputMode: MirageDirectTouchInputMode
     public let softwareKeyboardVisible: Bool
+    public let pencilInputMode: MiragePencilInputMode
     public let maxDrawableSize: CGSize?
     private let desktopResizeAckTimeout: Duration = .seconds(3)
     private let desktopResizeConvergenceTolerance: CGFloat = 4
@@ -52,6 +53,9 @@ public struct MirageStreamContentView: View {
     @State private var scrollInputSampler = ScrollInputSampler()
     @State private var pointerInputSampler = PointerInputSampler()
 
+    @available(*, deprecated, message: "Use directTouchInputMode instead.")
+    public var usesVirtualTrackpad: Bool { directTouchInputMode == .dragCursor }
+
     /// Creates a streaming content view backed by a session store and client service.
     /// - Parameters:
     ///   - session: Session metadata describing the stream.
@@ -63,8 +67,10 @@ public struct MirageStreamContentView: View {
     ///   - onHardwareKeyboardPresenceChanged: Optional handler for hardware keyboard availability.
     ///   - onSoftwareKeyboardVisibilityChanged: Optional handler for software keyboard visibility.
     ///   - dockSnapEnabled: Whether input should snap to the dock edge on iPadOS.
-    ///   - usesVirtualTrackpad: Whether direct touch uses a draggable virtual cursor.
+    ///   - usesVirtualTrackpad: Legacy direct-touch behavior flag.
+    ///   - directTouchInputMode: Direct-touch behavior mode for iPad and visionOS clients.
     ///   - softwareKeyboardVisible: Whether the software keyboard should be visible.
+    ///   - pencilInputMode: Apple Pencil behavior mode for iPad clients.
     public init(
         session: MirageStreamSessionState,
         sessionStore: MirageClientSessionStore,
@@ -76,7 +82,9 @@ public struct MirageStreamContentView: View {
         onSoftwareKeyboardVisibilityChanged: ((Bool) -> Void)? = nil,
         dockSnapEnabled: Bool = false,
         usesVirtualTrackpad: Bool = false,
+        directTouchInputMode: MirageDirectTouchInputMode? = nil,
         softwareKeyboardVisible: Bool = false,
+        pencilInputMode: MiragePencilInputMode = .drawingTablet,
         maxDrawableSize: CGSize? = nil
     ) {
         self.session = session
@@ -88,8 +96,10 @@ public struct MirageStreamContentView: View {
         self.onHardwareKeyboardPresenceChanged = onHardwareKeyboardPresenceChanged
         self.onSoftwareKeyboardVisibilityChanged = onSoftwareKeyboardVisibilityChanged
         self.dockSnapEnabled = dockSnapEnabled
-        self.usesVirtualTrackpad = usesVirtualTrackpad
+        self.directTouchInputMode = directTouchInputMode ??
+            (usesVirtualTrackpad ? .dragCursor : .normal)
         self.softwareKeyboardVisible = softwareKeyboardVisible
+        self.pencilInputMode = pencilInputMode
         self.maxDrawableSize = maxDrawableSize
     }
 
@@ -118,8 +128,10 @@ public struct MirageStreamContentView: View {
                 onHardwareKeyboardPresenceChanged: onHardwareKeyboardPresenceChanged,
                 onSoftwareKeyboardVisibilityChanged: onSoftwareKeyboardVisibilityChanged,
                 dockSnapEnabled: dockSnapEnabled,
-                usesVirtualTrackpad: usesVirtualTrackpad,
+                usesVirtualTrackpad: directTouchInputMode == .dragCursor,
+                directTouchInputMode: directTouchInputMode,
                 softwareKeyboardVisible: softwareKeyboardVisible,
+                pencilInputMode: pencilInputMode,
                 cursorLockEnabled: isDesktopStream && desktopStreamMode == .secondary,
                 maxDrawableSize: maxDrawableSize
             )
@@ -227,23 +239,39 @@ public struct MirageStreamContentView: View {
 
         switch event {
         case let .mouseMoved(mouseEvent):
-            pointerInputSampler.handle(kind: .move, event: mouseEvent) { resampledEvent in
-                clientService.sendInputFireAndForget(.mouseMoved(resampledEvent), forStream: session.streamID)
+            if mouseEvent.stylus != nil {
+                clientService.sendInputFireAndForget(.mouseMoved(mouseEvent), forStream: session.streamID)
+            } else {
+                pointerInputSampler.handle(kind: .move, event: mouseEvent) { resampledEvent in
+                    clientService.sendInputFireAndForget(.mouseMoved(resampledEvent), forStream: session.streamID)
+                }
             }
             return
         case let .mouseDragged(mouseEvent):
-            pointerInputSampler.handle(kind: .leftDrag, event: mouseEvent) { resampledEvent in
-                clientService.sendInputFireAndForget(.mouseDragged(resampledEvent), forStream: session.streamID)
+            if mouseEvent.stylus != nil {
+                clientService.sendInputFireAndForget(.mouseDragged(mouseEvent), forStream: session.streamID)
+            } else {
+                pointerInputSampler.handle(kind: .leftDrag, event: mouseEvent) { resampledEvent in
+                    clientService.sendInputFireAndForget(.mouseDragged(resampledEvent), forStream: session.streamID)
+                }
             }
             return
         case let .rightMouseDragged(mouseEvent):
-            pointerInputSampler.handle(kind: .rightDrag, event: mouseEvent) { resampledEvent in
-                clientService.sendInputFireAndForget(.rightMouseDragged(resampledEvent), forStream: session.streamID)
+            if mouseEvent.stylus != nil {
+                clientService.sendInputFireAndForget(.rightMouseDragged(mouseEvent), forStream: session.streamID)
+            } else {
+                pointerInputSampler.handle(kind: .rightDrag, event: mouseEvent) { resampledEvent in
+                    clientService.sendInputFireAndForget(.rightMouseDragged(resampledEvent), forStream: session.streamID)
+                }
             }
             return
         case let .otherMouseDragged(mouseEvent):
-            pointerInputSampler.handle(kind: .otherDrag, event: mouseEvent) { resampledEvent in
-                clientService.sendInputFireAndForget(.otherMouseDragged(resampledEvent), forStream: session.streamID)
+            if mouseEvent.stylus != nil {
+                clientService.sendInputFireAndForget(.otherMouseDragged(mouseEvent), forStream: session.streamID)
+            } else {
+                pointerInputSampler.handle(kind: .otherDrag, event: mouseEvent) { resampledEvent in
+                    clientService.sendInputFireAndForget(.otherMouseDragged(resampledEvent), forStream: session.streamID)
+                }
             }
             return
         case .mouseDown,

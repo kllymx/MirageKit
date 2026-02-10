@@ -45,8 +45,14 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
     /// Whether direct touch uses a draggable virtual cursor.
     public var usesVirtualTrackpad: Bool
 
+    /// Direct-touch behavior mode override.
+    public var directTouchInputMode: MirageDirectTouchInputMode?
+
     /// Whether the software keyboard should be visible.
     public var softwareKeyboardVisible: Bool
+
+    /// Apple Pencil behavior mode.
+    public var pencilInputMode: MiragePencilInputMode
 
     /// Whether the system cursor should be locked/hidden.
     public var cursorLockEnabled: Bool
@@ -66,7 +72,9 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
         onSoftwareKeyboardVisibilityChanged: ((Bool) -> Void)? = nil,
         dockSnapEnabled: Bool = false,
         usesVirtualTrackpad: Bool = false,
+        directTouchInputMode: MirageDirectTouchInputMode? = nil,
         softwareKeyboardVisible: Bool = false,
+        pencilInputMode: MiragePencilInputMode = .drawingTablet,
         cursorLockEnabled: Bool = false,
         maxDrawableSize: CGSize? = nil
     ) {
@@ -81,7 +89,9 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
         self.onSoftwareKeyboardVisibilityChanged = onSoftwareKeyboardVisibilityChanged
         self.dockSnapEnabled = dockSnapEnabled
         self.usesVirtualTrackpad = usesVirtualTrackpad
+        self.directTouchInputMode = directTouchInputMode
         self.softwareKeyboardVisible = softwareKeyboardVisible
+        self.pencilInputMode = pencilInputMode
         self.cursorLockEnabled = cursorLockEnabled
         self.maxDrawableSize = maxDrawableSize
     }
@@ -106,7 +116,9 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
             onSoftwareKeyboardVisibilityChanged: onSoftwareKeyboardVisibilityChanged,
             dockSnapEnabled: dockSnapEnabled,
             usesVirtualTrackpad: usesVirtualTrackpad,
+            directTouchInputMode: directTouchInputMode,
             softwareKeyboardVisible: softwareKeyboardVisible,
+            pencilInputMode: pencilInputMode,
             cursorStore: cursorStore,
             cursorPositionStore: cursorPositionStore,
             cursorLockEnabled: cursorLockEnabled,
@@ -131,7 +143,9 @@ public struct MirageStreamViewRepresentable: UIViewControllerRepresentable {
             onSoftwareKeyboardVisibilityChanged: onSoftwareKeyboardVisibilityChanged,
             dockSnapEnabled: dockSnapEnabled,
             usesVirtualTrackpad: usesVirtualTrackpad,
+            directTouchInputMode: directTouchInputMode,
             softwareKeyboardVisible: softwareKeyboardVisible,
+            pencilInputMode: pencilInputMode,
             cursorStore: cursorStore,
             cursorPositionStore: cursorPositionStore,
             cursorLockEnabled: cursorLockEnabled,
@@ -181,7 +195,9 @@ public final class MirageStreamViewController: UIViewController {
         onSoftwareKeyboardVisibilityChanged: ((Bool) -> Void)?,
         dockSnapEnabled: Bool,
         usesVirtualTrackpad: Bool,
+        directTouchInputMode: MirageDirectTouchInputMode?,
         softwareKeyboardVisible: Bool,
+        pencilInputMode: MiragePencilInputMode,
         cursorStore: MirageClientCursorStore?,
         cursorPositionStore: MirageClientCursorPositionStore?,
         cursorLockEnabled: Bool,
@@ -194,8 +210,10 @@ public final class MirageStreamViewController: UIViewController {
         captureView.onHardwareKeyboardPresenceChanged = onHardwareKeyboardPresenceChanged
         captureView.onSoftwareKeyboardVisibilityChanged = onSoftwareKeyboardVisibilityChanged
         captureView.dockSnapEnabled = dockSnapEnabled
-        captureView.usesVirtualTrackpad = usesVirtualTrackpad
+        captureView.directTouchInputMode = directTouchInputMode ??
+            (usesVirtualTrackpad ? .dragCursor : .normal)
         captureView.softwareKeyboardVisible = softwareKeyboardVisible
+        captureView.pencilInputMode = pencilInputMode
         captureView.cursorStore = cursorStore
         captureView.cursorPositionStore = cursorPositionStore
         captureView.cursorLockEnabled = cursorLockEnabled

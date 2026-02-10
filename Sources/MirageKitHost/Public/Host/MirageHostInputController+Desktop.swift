@@ -58,13 +58,37 @@ extension MirageHostInputController {
                 let point = screenPoint(e.location, in: bounds)
                 injectDesktopMouseEvent(.otherMouseUp, e, at: point)
             case let .mouseMoved(e):
-                queuePointerLerp(.mouseMoved, e, bounds, windowID: 0, app: nil, isDesktop: true)
+                if appliesTabletSubtype(e) {
+                    flushPointerLerp()
+                    let point = screenPoint(e.location, in: bounds)
+                    injectDesktopMouseEvent(.mouseMoved, e, at: point)
+                } else {
+                    queuePointerLerp(.mouseMoved, e, bounds, windowID: 0, app: nil, isDesktop: true)
+                }
             case let .mouseDragged(e):
-                queuePointerLerp(.leftMouseDragged, e, bounds, windowID: 0, app: nil, isDesktop: true)
+                if appliesTabletSubtype(e) {
+                    flushPointerLerp()
+                    let point = screenPoint(e.location, in: bounds)
+                    injectDesktopMouseEvent(.leftMouseDragged, e, at: point)
+                } else {
+                    queuePointerLerp(.leftMouseDragged, e, bounds, windowID: 0, app: nil, isDesktop: true)
+                }
             case let .rightMouseDragged(e):
-                queuePointerLerp(.rightMouseDragged, e, bounds, windowID: 0, app: nil, isDesktop: true)
+                if appliesTabletSubtype(e) {
+                    flushPointerLerp()
+                    let point = screenPoint(e.location, in: bounds)
+                    injectDesktopMouseEvent(.rightMouseDragged, e, at: point)
+                } else {
+                    queuePointerLerp(.rightMouseDragged, e, bounds, windowID: 0, app: nil, isDesktop: true)
+                }
             case let .otherMouseDragged(e):
-                queuePointerLerp(.otherMouseDragged, e, bounds, windowID: 0, app: nil, isDesktop: true)
+                if appliesTabletSubtype(e) {
+                    flushPointerLerp()
+                    let point = screenPoint(e.location, in: bounds)
+                    injectDesktopMouseEvent(.otherMouseDragged, e, at: point)
+                } else {
+                    queuePointerLerp(.otherMouseDragged, e, bounds, windowID: 0, app: nil, isDesktop: true)
+                }
             case let .scrollWheel(e):
                 injectDesktopScrollEvent(e, bounds: bounds)
             case let .keyDown(e):
@@ -121,7 +145,8 @@ extension MirageHostInputController {
             break
         }
 
-        postEvent(cgEvent)
+        applyTabletFieldsIfNeeded(cgEvent, from: event, type: type, point: point)
+        postStylusAwarePointerEvent(cgEvent, from: event, type: type, at: point)
     }
 
     /// Post a HID keyboard event for system-level UI compatibility.

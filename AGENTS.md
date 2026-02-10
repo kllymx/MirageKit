@@ -14,6 +14,9 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - In-flight cap: 120Hz 2 frames; 60Hz 1 frame.
 - Keyframe payload: 4-byte parameter set length prefix; Annex B parameter sets; AVCC frame data.
 - iPad modifier input uses flags snapshots with gesture resync to avoid stuck keys.
+- iPad Apple Pencil input supports global mode selection, and Pencil contact forwards pressure plus stylus orientation metadata for tablet-aware apps in both `mouse` and `drawingTablet` modes.
+- iPad direct touch input supports `normal`, `dragCursor`, and `exclusive` modes; exclusive mode routes single-finger touch through native scroll physics while pointer clicks come from Apple Pencil or indirect pointer input.
+- Apple Pencil squeeze triggers a secondary click at the hover location when available, or the latest pointer location.
 - Custom mode: encoder overrides for pixel format, color space, bitrate, and keyframe interval.
 - `MIRAGE_SIGNPOST=1` enables Instruments signposts for decode/render timing.
 - Automatic quality tests use staged UDP payloads (warmup + ramp until plateau) plus VideoToolbox benchmarks for encode/decode timing; quality probes use a SwiftUI animated probe scene and a transport probe that sends real encoded frames over UDP.
@@ -130,6 +133,7 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 ## Input Handling
 - Host input clears stuck modifiers after 0.5s of modifier inactivity.
 - iPad modifier input uses flags snapshots with gesture resync to avoid stuck keys.
+- Stylus-backed pointer events bypass pointer smoothing paths to preserve pressure and tilt fidelity.
 - Client cursor state is read from `MirageClientCursorStore` inside input views to avoid SwiftUI-driven cursor churn.
 - Secondary display cursor position is read from `MirageClientCursorPositionStore` for locked cursor rendering.
 

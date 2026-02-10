@@ -61,6 +61,11 @@ public final class MirageHostInputController: @unchecked Sendable {
     let pointerStopDelay: TimeInterval = 0.05
     let pointerSnapThreshold: CGFloat = 0.0005
 
+    // MARK: - Tablet State (accessed from accessibilityQueue only)
+
+    /// Tracks whether a synthetic tablet pointer is currently in proximity.
+    var tabletProximityActive: Bool = false
+
     // MARK: - Modifier State Tracking (accessed from accessibilityQueue only)
 
     /// Track the last event time per modifier flag for individual staleness detection.

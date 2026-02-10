@@ -106,13 +106,22 @@ public class InputCapturingView: UIView {
     /// Whether input should snap to the dock edge.
     public var dockSnapEnabled: Bool = false
 
-    /// Whether direct touch should use a draggable virtual cursor.
-    public var usesVirtualTrackpad: Bool = false {
+    /// Direct-touch behavior mode for iPad and visionOS clients.
+    public var directTouchInputMode: MirageDirectTouchInputMode = .normal {
         didSet {
-            guard usesVirtualTrackpad != oldValue else { return }
+            guard directTouchInputMode != oldValue else { return }
             updateVirtualTrackpadMode()
         }
     }
+
+    @available(*, deprecated, message: "Use directTouchInputMode instead.")
+    public var usesVirtualTrackpad: Bool {
+        get { directTouchInputMode == .dragCursor }
+        set { directTouchInputMode = newValue ? .dragCursor : .normal }
+    }
+
+    /// Apple Pencil behavior mode.
+    public var pencilInputMode: MiragePencilInputMode = .drawingTablet
 
     // Cursor state from host
     var currentCursorType: MirageCursorType = .arrow
@@ -157,6 +166,11 @@ public class InputCapturingView: UIView {
     var touchScrollDecelerationVelocity: CGPoint = .zero
     var touchScrollDecelerationLink: CADisplayLink?
     var touchScrollDecelerationLocation: CGPoint = .zero
+    var activePencilTouchID: ObjectIdentifier?
+    var lastPencilPressure: CGFloat = 0
+    #if os(iOS)
+    private var pencilInteraction: UIPencilInteraction?
+    #endif
 
     private static func makeCursorEffectView() -> UIVisualEffectView {
         #if os(iOS)
@@ -507,6 +521,18 @@ public class InputCapturingView: UIView {
             let event = MirageRotateEvent(rotation: rotation, phase: phase)
             onInputEvent?(.rotate(event))
         }
+        scrollPhysicsView!.onPencilTouchesBegan = { [weak self] touches, event in
+            self?.handlePencilTouchesBegan(touches, event: event)
+        }
+        scrollPhysicsView!.onPencilTouchesMoved = { [weak self] touches, event in
+            self?.handlePencilTouchesMoved(touches, event: event)
+        }
+        scrollPhysicsView!.onPencilTouchesEnded = { [weak self] touches, event in
+            self?.handlePencilTouchesEnded(touches, event: event)
+        }
+        scrollPhysicsView!.onPencilTouchesCancelled = { [weak self] touches, event in
+            self?.handlePencilTouchesCancelled(touches, event: event)
+        }
 
         // Enable user interaction
         isUserInteractionEnabled = true
@@ -516,6 +542,7 @@ public class InputCapturingView: UIView {
         setupPointerInteraction()
         setupVirtualCursorView()
         setupLockedCursorView()
+        setupPencilInteraction()
         setupSoftwareKeyboardField()
         updateVirtualTrackpadMode()
         updateCursorLockMode()
@@ -560,12 +587,24 @@ public class InputCapturingView: UIView {
         addSubview(lockedCursorView)
     }
 
+    private func setupPencilInteraction() {
+        #if os(iOS)
+        let interaction = UIPencilInteraction()
+        interaction.delegate = self
+        addInteraction(interaction)
+        pencilInteraction = interaction
+        #endif
+    }
+
     func updateVirtualTrackpadMode() {
         let directTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         let indirectTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
 
         if cursorLockEnabled {
             longPressGesture.allowedTouchTypes = directTouchTypes
+            scrollGesture.isEnabled = true
+            directRotationGesture.isEnabled = true
+            scrollPhysicsView?.directTouchScrollEnabled = false
             virtualCursorPanGesture.isEnabled = false
             virtualCursorTapGesture.isEnabled = false
             virtualCursorRightTapGesture.isEnabled = false
@@ -573,23 +612,44 @@ public class InputCapturingView: UIView {
             virtualDragActive = false
             stopVirtualCursorDeceleration()
             setVirtualCursorVisible(false)
-        } else if usesVirtualTrackpad {
-            longPressGesture.allowedTouchTypes = indirectTouchTypes
-            virtualCursorPanGesture.isEnabled = true
-            virtualCursorTapGesture.isEnabled = true
-            virtualCursorRightTapGesture.isEnabled = true
-            virtualCursorLongPressGesture.isEnabled = true
-            lastCursorPosition = virtualCursorPosition
-            setVirtualCursorVisible(true)
         } else {
-            longPressGesture.allowedTouchTypes = directTouchTypes + indirectTouchTypes
-            virtualCursorPanGesture.isEnabled = false
-            virtualCursorTapGesture.isEnabled = false
-            virtualCursorRightTapGesture.isEnabled = false
-            virtualCursorLongPressGesture.isEnabled = false
-            virtualDragActive = false
-            stopVirtualCursorDeceleration()
-            setVirtualCursorVisible(false)
+            switch directTouchInputMode {
+            case .dragCursor:
+                longPressGesture.allowedTouchTypes = indirectTouchTypes
+                scrollGesture.isEnabled = true
+                directRotationGesture.isEnabled = true
+                scrollPhysicsView?.directTouchScrollEnabled = false
+                virtualCursorPanGesture.isEnabled = true
+                virtualCursorTapGesture.isEnabled = true
+                virtualCursorRightTapGesture.isEnabled = true
+                virtualCursorLongPressGesture.isEnabled = true
+                lastCursorPosition = virtualCursorPosition
+                setVirtualCursorVisible(true)
+            case .normal:
+                longPressGesture.allowedTouchTypes = directTouchTypes + indirectTouchTypes
+                scrollGesture.isEnabled = true
+                directRotationGesture.isEnabled = true
+                scrollPhysicsView?.directTouchScrollEnabled = false
+                virtualCursorPanGesture.isEnabled = false
+                virtualCursorTapGesture.isEnabled = false
+                virtualCursorRightTapGesture.isEnabled = false
+                virtualCursorLongPressGesture.isEnabled = false
+                virtualDragActive = false
+                stopVirtualCursorDeceleration()
+                setVirtualCursorVisible(false)
+            case .exclusive:
+                longPressGesture.allowedTouchTypes = indirectTouchTypes
+                scrollGesture.isEnabled = false
+                directRotationGesture.isEnabled = false
+                scrollPhysicsView?.directTouchScrollEnabled = true
+                virtualCursorPanGesture.isEnabled = false
+                virtualCursorTapGesture.isEnabled = false
+                virtualCursorRightTapGesture.isEnabled = false
+                virtualCursorLongPressGesture.isEnabled = false
+                virtualDragActive = false
+                stopVirtualCursorDeceleration()
+                setVirtualCursorVisible(false)
+            }
         }
     }
 
@@ -839,6 +899,9 @@ public class InputCapturingView: UIView {
         // Clear all modifier and key repeat state when app loses focus
         stopAllKeyRepeats()
         resetAllModifiers()
+        activePencilTouchID = nil
+        isDragging = false
+        lastPencilPressure = 0
         clearSoftwareKeyboardState()
         stopTouchScrollDeceleration()
 
@@ -918,7 +981,346 @@ public class InputCapturingView: UIView {
         // Clear all modifier and key repeat state when losing focus
         stopAllKeyRepeats()
         resetAllModifiers()
+        activePencilTouchID = nil
+        isDragging = false
+        lastPencilPressure = 0
         return super.resignFirstResponder()
+    }
+
+    // MARK: - Pencil Input
+
+    override public func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let touchSplit = splitStylusTouches(touches)
+        handlePencilTouchesBegan(touchSplit.stylus, event: event)
+
+        if !touchSplit.nonStylus.isEmpty {
+            super.touchesBegan(touchSplit.nonStylus, with: event)
+        }
+    }
+
+    override public func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let touchSplit = splitStylusTouches(touches)
+        handlePencilTouchesMoved(touchSplit.stylus, event: event)
+
+        if !touchSplit.nonStylus.isEmpty {
+            super.touchesMoved(touchSplit.nonStylus, with: event)
+        }
+    }
+
+    override public func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let touchSplit = splitStylusTouches(touches)
+        handlePencilTouchesEnded(touchSplit.stylus, event: event)
+
+        if !touchSplit.nonStylus.isEmpty {
+            super.touchesEnded(touchSplit.nonStylus, with: event)
+        }
+    }
+
+    override public func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let touchSplit = splitStylusTouches(touches)
+        handlePencilTouchesCancelled(touchSplit.stylus, event: event)
+
+        if !touchSplit.nonStylus.isEmpty {
+            super.touchesCancelled(touchSplit.nonStylus, with: event)
+        }
+    }
+
+    func splitStylusTouches(_ touches: Set<UITouch>) -> (stylus: Set<UITouch>, nonStylus: Set<UITouch>) {
+        var stylusTouches = Set<UITouch>()
+        var nonStylusTouches = Set<UITouch>()
+
+        for touch in touches {
+            if isStylusTouch(touch) {
+                stylusTouches.insert(touch)
+            } else {
+                nonStylusTouches.insert(touch)
+            }
+        }
+
+        return (stylusTouches, nonStylusTouches)
+    }
+
+    func isStylusTouch(_ touch: UITouch) -> Bool {
+        if touch.type == .pencil { return true }
+        guard touch.type == .direct else { return false }
+
+        // Some iPadOS builds report Pencil contact as direct while still exposing
+        // stylus-only metrics. Prefer those metrics over touch.type for routing.
+        if touch.maximumPossibleForce > 1.0 { return true }
+        if touch.force > 1.0 { return true }
+        if touch.estimatedProperties.contains(.force) ||
+            touch.estimatedProperties.contains(.azimuth) ||
+            touch.estimatedProperties.contains(.altitude) {
+            return true
+        }
+        if touch.estimatedPropertiesExpectingUpdates.contains(.force) ||
+            touch.estimatedPropertiesExpectingUpdates.contains(.azimuth) ||
+            touch.estimatedPropertiesExpectingUpdates.contains(.altitude) {
+            return true
+        }
+        return false
+    }
+
+    private func handlePencilTouchesBegan(_ touches: Set<UITouch>, event _: UIEvent?) {
+        guard !touches.isEmpty else { return }
+        if let touch = touches.first, activePencilTouchID == nil {
+            activePencilTouchID = ObjectIdentifier(touch)
+            sendPencilDown(for: touch)
+        }
+    }
+
+    private func handlePencilTouchesMoved(_ touches: Set<UITouch>, event: UIEvent?) {
+        guard !touches.isEmpty else { return }
+        guard let activePencilTouchID else { return }
+        if let touch = touches.first(where: { ObjectIdentifier($0) == activePencilTouchID }) {
+            sendPencilMovedSamples(for: touch, event: event)
+        }
+    }
+
+    private func handlePencilTouchesEnded(_ touches: Set<UITouch>, event _: UIEvent?) {
+        guard !touches.isEmpty else { return }
+        if let activePencilTouchID,
+           let touch = touches.first(where: { ObjectIdentifier($0) == activePencilTouchID }) {
+            sendPencilUp(for: touch)
+            self.activePencilTouchID = nil
+        }
+    }
+
+    private func handlePencilTouchesCancelled(_ touches: Set<UITouch>, event _: UIEvent?) {
+        guard !touches.isEmpty else { return }
+        if let activePencilTouchID,
+           let touch = touches.first(where: { ObjectIdentifier($0) == activePencilTouchID }) {
+            sendPencilUp(for: touch)
+            self.activePencilTouchID = nil
+        }
+    }
+
+    func sendPencilDown(for touch: UITouch) {
+        let rawLocation = touch.preciseLocation(in: self)
+        let location = normalizedLocation(rawLocation)
+        let modifiers = currentPencilModifiers()
+
+        if cursorLockEnabled {
+            lockedCursorPosition = location
+            noteLockedCursorLocalInput()
+            setLockedCursorVisible(true)
+            updateLockedCursorViewPosition()
+        }
+
+        if usesVirtualTrackpad {
+            setVirtualCursorVisible(false)
+            updateVirtualCursorPosition(location, updateVisibility: false)
+        }
+
+        lastCursorPosition = location
+        isDragging = true
+
+        let pressure = normalizedPencilPressure(for: touch)
+        let stylus = stylusEvent(from: touch)
+        let mouseEvent = pointerEventForPencil(
+            location: location,
+            modifiers: modifiers,
+            pressure: pressure,
+            stylus: stylus,
+            clickCount: 1
+        )
+        onInputEvent?(.mouseDown(mouseEvent))
+    }
+
+    func sendPencilMovedSamples(for touch: UITouch, event: UIEvent?) {
+        let modifiers = currentPencilModifiers()
+        let samples = event?.coalescedTouches(for: touch) ?? [touch]
+
+        for sample in samples {
+            let rawLocation = sample.preciseLocation(in: self)
+            let location = normalizedLocation(rawLocation)
+
+            if cursorLockEnabled {
+                lockedCursorPosition = location
+                noteLockedCursorLocalInput()
+                setLockedCursorVisible(true)
+                updateLockedCursorViewPosition()
+            }
+
+            if usesVirtualTrackpad {
+                setVirtualCursorVisible(false)
+                updateVirtualCursorPosition(location, updateVisibility: false)
+            }
+
+            lastCursorPosition = location
+            let pressure = normalizedPencilPressure(for: sample)
+            let stylus = stylusEvent(from: sample)
+            let mouseEvent = pointerEventForPencil(
+                location: location,
+                modifiers: modifiers,
+                pressure: pressure,
+                stylus: stylus
+            )
+            onInputEvent?(.mouseDragged(mouseEvent))
+        }
+    }
+
+    func sendPencilUp(for touch: UITouch) {
+        let rawLocation = touch.preciseLocation(in: self)
+        let location = normalizedLocation(rawLocation)
+        let modifiers = currentPencilModifiers()
+        let stylus = stylusEvent(from: touch)
+        let mouseEvent = pointerEventForPencil(
+            location: location,
+            modifiers: modifiers,
+            pressure: 0,
+            stylus: stylus,
+            clickCount: 1
+        )
+        onInputEvent?(.mouseUp(mouseEvent))
+        isDragging = false
+        lastPencilPressure = 0
+    }
+
+    func resolvedPencilSecondaryClickLocation(hoverLocation: CGPoint?) -> CGPoint {
+        if let hoverLocation {
+            let location = normalizedLocation(hoverLocation)
+            if cursorLockEnabled {
+                lockedCursorPosition = location
+                noteLockedCursorLocalInput()
+                setLockedCursorVisible(true)
+                updateLockedCursorViewPosition()
+            }
+            if usesVirtualTrackpad {
+                setVirtualCursorVisible(false)
+                updateVirtualCursorPosition(location, updateVisibility: false)
+            }
+            lastCursorPosition = location
+            return location
+        }
+
+        if cursorLockEnabled { return lockedCursorPosition }
+        if let lastCursorPosition { return lastCursorPosition }
+        if usesVirtualTrackpad { return virtualCursorPosition }
+        return CGPoint(x: 0.5, y: 0.5)
+    }
+
+    func sendPencilSecondaryClick(at location: CGPoint) {
+        let now = CACurrentMediaTime()
+        let timeSinceLastTap = now - lastRightTapTime
+        let distance = hypot(location.x - lastRightTapLocation.x, location.y - lastRightTapLocation.y)
+
+        if timeSinceLastTap < Self.multiClickTimeThreshold, distance < Self.multiClickDistanceThreshold { currentRightClickCount += 1 } else {
+            currentRightClickCount = 1
+        }
+
+        lastRightTapTime = now
+        lastRightTapLocation = location
+
+        let modifiers = currentPencilModifiers()
+        let mouseEvent = MirageMouseEvent(
+            button: .right,
+            location: location,
+            clickCount: currentRightClickCount,
+            modifiers: modifiers
+        )
+
+        onInputEvent?(.rightMouseDown(mouseEvent))
+        onInputEvent?(.rightMouseUp(mouseEvent))
+    }
+
+    func currentPencilModifiers() -> MirageModifierFlags {
+        _ = refreshModifiersForInput()
+        let snapshot = keyboardModifiers
+        sendModifierSnapshotIfNeeded(snapshot)
+        return snapshot
+    }
+
+    func normalizedPencilPressure(for touch: UITouch) -> CGFloat {
+        let maxForce = touch.maximumPossibleForce
+        if maxForce > 0 {
+            let normalized = min(max(touch.force / maxForce, 0), 1)
+            if normalized > 0 {
+                lastPencilPressure = normalized
+                return normalized
+            }
+
+            if isDragging, lastPencilPressure > 0 { return lastPencilPressure }
+            return 0.01
+        }
+
+        if isDragging, lastPencilPressure > 0 { return lastPencilPressure }
+        return 1
+    }
+
+    func stylusEvent(from touch: UITouch) -> MirageStylusEvent {
+        let altitude = min(max(touch.altitudeAngle, 0), .pi / 2)
+        let azimuth = touch.azimuthAngle(in: self)
+        let azimuthUnitVector = touch.azimuthUnitVector(in: self)
+        let tiltMagnitude = min(max(cos(altitude), 0), 1)
+        let tiltX = min(max(azimuthUnitVector.dx * tiltMagnitude, -1), 1)
+        let tiltY = min(max(azimuthUnitVector.dy * tiltMagnitude, -1), 1)
+        let rollAngle: CGFloat?
+        #if os(iOS)
+        if #available(iOS 17.5, *) {
+            rollAngle = touch.rollAngle
+        } else {
+            rollAngle = nil
+        }
+        #else
+        rollAngle = nil
+        #endif
+
+        return MirageStylusEvent(
+            altitudeAngle: altitude,
+            azimuthAngle: azimuth,
+            tiltX: tiltX,
+            tiltY: tiltY,
+            rollAngle: rollAngle
+        )
+    }
+
+    func stylusHoverEvent(from gesture: UIHoverGestureRecognizer) -> MirageStylusEvent? {
+        guard gesture.zOffset > 0 else { return nil }
+
+        let altitude = min(max(gesture.altitudeAngle, 0), .pi / 2)
+        let azimuth = gesture.azimuthAngle(in: self)
+        let azimuthUnitVector = gesture.azimuthUnitVector(in: self)
+        let tiltMagnitude = min(max(cos(altitude), 0), 1)
+        let tiltX = min(max(azimuthUnitVector.dx * tiltMagnitude, -1), 1)
+        let tiltY = min(max(azimuthUnitVector.dy * tiltMagnitude, -1), 1)
+        let rollAngle: CGFloat?
+        #if os(iOS)
+        if #available(iOS 17.5, *) {
+            rollAngle = gesture.rollAngle
+        } else {
+            rollAngle = nil
+        }
+        #else
+        rollAngle = nil
+        #endif
+
+        return MirageStylusEvent(
+            altitudeAngle: altitude,
+            azimuthAngle: azimuth,
+            tiltX: tiltX,
+            tiltY: tiltY,
+            rollAngle: rollAngle,
+            zOffset: gesture.zOffset,
+            isHovering: true
+        )
+    }
+
+    func pointerEventForPencil(
+        location: CGPoint,
+        modifiers: MirageModifierFlags,
+        pressure: CGFloat,
+        stylus: MirageStylusEvent?,
+        clickCount: Int = 1
+    ) -> MirageMouseEvent {
+        return MirageMouseEvent(
+            button: .left,
+            location: location,
+            clickCount: clickCount,
+            modifiers: modifiers,
+            pressure: pressure,
+            stylus: stylus
+        )
     }
 
     deinit {
@@ -936,6 +1338,20 @@ public class InputCapturingView: UIView {
         NotificationCenter.default.removeObserver(self)
     }
 }
+
+#if os(iOS)
+extension InputCapturingView: UIPencilInteractionDelegate {
+    @available(iOS 17.5, *)
+    public func pencilInteraction(
+        _: UIPencilInteraction,
+        didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze
+    ) {
+        guard squeeze.phase == .ended else { return }
+        let location = resolvedPencilSecondaryClickLocation(hoverLocation: squeeze.hoverPose?.location)
+        sendPencilSecondaryClick(at: location)
+    }
+}
+#endif
 
 #if canImport(GameController)
 @MainActor

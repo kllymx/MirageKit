@@ -25,6 +25,9 @@ public struct MirageMouseEvent: Codable, Sendable, Hashable {
     /// Pressure for Force Touch (0.0 - 1.0)
     public let pressure: CGFloat
 
+    /// Optional stylus metadata for tablet-style input.
+    public let stylus: MirageStylusEvent?
+
     /// Event timestamp
     public let timestamp: TimeInterval
 
@@ -34,6 +37,7 @@ public struct MirageMouseEvent: Codable, Sendable, Hashable {
         clickCount: Int = 1,
         modifiers: MirageModifierFlags = [],
         pressure: CGFloat = 1.0,
+        stylus: MirageStylusEvent? = nil,
         timestamp: TimeInterval = Date.timeIntervalSinceReferenceDate
     ) {
         self.button = button
@@ -41,6 +45,7 @@ public struct MirageMouseEvent: Codable, Sendable, Hashable {
         self.clickCount = clickCount
         self.modifiers = modifiers
         self.pressure = pressure
+        self.stylus = stylus
         self.timestamp = timestamp
     }
 }

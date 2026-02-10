@@ -19,7 +19,7 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
     override var safeAreaInsets: UIEdgeInsets { .zero }
 
     /// The invisible scroll view for capturing trackpad physics
-    let scrollView: UIScrollView
+    private let scrollView: PencilForwardingScrollView
 
     /// Dummy content view that scrollView scrolls (never visible)
     private let scrollContent: UIView
@@ -32,6 +32,20 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
 
     /// Callback for rotation events: (rotationDegrees, phase)
     var onRotation: ((CGFloat, MirageScrollPhase) -> Void)?
+
+    /// Whether direct one-finger touches should drive native scroll physics.
+    var directTouchScrollEnabled: Bool = false {
+        didSet {
+            guard directTouchScrollEnabled != oldValue else { return }
+            updatePanGestureAllowedTouchTypes()
+        }
+    }
+
+    /// Pencil contact forwarding callbacks.
+    var onPencilTouchesBegan: ((Set<UITouch>, UIEvent?) -> Void)?
+    var onPencilTouchesMoved: ((Set<UITouch>, UIEvent?) -> Void)?
+    var onPencilTouchesEnded: ((Set<UITouch>, UIEvent?) -> Void)?
+    var onPencilTouchesCancelled: ((Set<UITouch>, UIEvent?) -> Void)?
 
     /// Size of scrollable area - large enough for extended scrolling before recenter
     private let scrollableSize: CGFloat = 100_000
@@ -52,7 +66,7 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
     private var lastRotationAngle: CGFloat = 0.0
 
     override init(frame: CGRect) {
-        scrollView = UIScrollView(frame: frame)
+        scrollView = PencilForwardingScrollView(frame: frame)
         scrollContent = UIView()
         contentView = UIView(frame: frame)
         super.init(frame: frame)
@@ -60,7 +74,7 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
     }
 
     required init?(coder: NSCoder) {
-        scrollView = UIScrollView()
+        scrollView = PencilForwardingScrollView()
         scrollContent = UIView()
         contentView = UIView()
         super.init(coder: coder)
@@ -85,11 +99,20 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
         // Make scroll view invisible but still receive events
         scrollView.backgroundColor = .clear
         scrollView.isOpaque = false
+        scrollView.onPencilTouchesBegan = { [weak self] touches, event in
+            self?.onPencilTouchesBegan?(touches, event)
+        }
+        scrollView.onPencilTouchesMoved = { [weak self] touches, event in
+            self?.onPencilTouchesMoved?(touches, event)
+        }
+        scrollView.onPencilTouchesEnded = { [weak self] touches, event in
+            self?.onPencilTouchesEnded?(touches, event)
+        }
+        scrollView.onPencilTouchesCancelled = { [weak self] touches, event in
+            self?.onPencilTouchesCancelled?(touches, event)
+        }
 
-        // CRITICAL: Only accept trackpad/mouse wheel scrolling, not direct touch
-        scrollView.panGestureRecognizer.allowedTouchTypes = [
-            NSNumber(value: UITouch.TouchType.indirectPointer.rawValue),
-        ]
+        updatePanGestureAllowedTouchTypes()
 
         // Add scroll content (large enough to allow scrolling in all directions)
         scrollContent.translatesAutoresizingMaskIntoConstraints = false
@@ -125,6 +148,14 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
         rotationGesture.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
         rotationGesture.delegate = self
         addGestureRecognizer(rotationGesture)
+    }
+
+    private func updatePanGestureAllowedTouchTypes() {
+        var touchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        if directTouchScrollEnabled {
+            touchTypes.append(NSNumber(value: UITouch.TouchType.direct.rawValue))
+        }
+        scrollView.panGestureRecognizer.allowedTouchTypes = touchTypes
     }
 
     override func layoutSubviews() {
@@ -219,6 +250,11 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
         true
     }
 
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard gestureRecognizer == scrollView.panGestureRecognizer || gestureRecognizer == rotationGesture else { return true }
+        return !isStylusLikeTouch(touch, in: self)
+    }
+
     // MARK: - Trackpad Gesture Handlers
 
     @objc
@@ -245,5 +281,78 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
             break
         }
     }
+}
+
+private final class PencilForwardingScrollView: UIScrollView {
+    var onPencilTouchesBegan: ((Set<UITouch>, UIEvent?) -> Void)?
+    var onPencilTouchesMoved: ((Set<UITouch>, UIEvent?) -> Void)?
+    var onPencilTouchesEnded: ((Set<UITouch>, UIEvent?) -> Void)?
+    var onPencilTouchesCancelled: ((Set<UITouch>, UIEvent?) -> Void)?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let pencilTouches = touches.filter { isStylusLikeTouch($0, in: self) }
+        if !pencilTouches.isEmpty {
+            onPencilTouchesBegan?(Set(pencilTouches), event)
+        }
+
+        let nonPencilTouches = touches.filter { !isStylusLikeTouch($0, in: self) }
+        if !nonPencilTouches.isEmpty {
+            super.touchesBegan(Set(nonPencilTouches), with: event)
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let pencilTouches = touches.filter { isStylusLikeTouch($0, in: self) }
+        if !pencilTouches.isEmpty {
+            onPencilTouchesMoved?(Set(pencilTouches), event)
+        }
+
+        let nonPencilTouches = touches.filter { !isStylusLikeTouch($0, in: self) }
+        if !nonPencilTouches.isEmpty {
+            super.touchesMoved(Set(nonPencilTouches), with: event)
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let pencilTouches = touches.filter { isStylusLikeTouch($0, in: self) }
+        if !pencilTouches.isEmpty {
+            onPencilTouchesEnded?(Set(pencilTouches), event)
+        }
+
+        let nonPencilTouches = touches.filter { !isStylusLikeTouch($0, in: self) }
+        if !nonPencilTouches.isEmpty {
+            super.touchesEnded(Set(nonPencilTouches), with: event)
+        }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let pencilTouches = touches.filter { isStylusLikeTouch($0, in: self) }
+        if !pencilTouches.isEmpty {
+            onPencilTouchesCancelled?(Set(pencilTouches), event)
+        }
+
+        let nonPencilTouches = touches.filter { !isStylusLikeTouch($0, in: self) }
+        if !nonPencilTouches.isEmpty {
+            super.touchesCancelled(Set(nonPencilTouches), with: event)
+        }
+    }
+}
+
+private func isStylusLikeTouch(_ touch: UITouch, in _: UIView) -> Bool {
+    if touch.type == .pencil { return true }
+    guard touch.type == .direct else { return false }
+    if touch.maximumPossibleForce > 1.0 { return true }
+    if touch.force > 1.0 { return true }
+    if touch.estimatedProperties.contains(.force) ||
+        touch.estimatedProperties.contains(.azimuth) ||
+        touch.estimatedProperties.contains(.altitude) {
+        return true
+    }
+    if touch.estimatedPropertiesExpectingUpdates.contains(.force) ||
+        touch.estimatedPropertiesExpectingUpdates.contains(.azimuth) ||
+        touch.estimatedPropertiesExpectingUpdates.contains(.altitude) {
+        return true
+    }
+    return false
 }
 #endif

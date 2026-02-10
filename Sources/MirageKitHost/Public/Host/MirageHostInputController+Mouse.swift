@@ -25,9 +25,16 @@ extension MirageHostInputController {
         windowID: WindowID,
         app _: MirageApplication?
     ) {
-        let actualFrame = currentWindowFrame(for: windowID)
-        let useActualFrame = actualFrame.map { framesAreClose($0, windowFrame) } ?? false
-        let resolvedFrame = useActualFrame ? (actualFrame ?? windowFrame) : windowFrame
+        let resolvedFrame: CGRect
+        if appliesTabletSubtype(event) {
+            // Stylus input is absolute and high-frequency; use the stream frame directly
+            // to avoid occasional frame-query jitter while drawing.
+            resolvedFrame = windowFrame
+        } else {
+            let actualFrame = currentWindowFrame(for: windowID)
+            let useActualFrame = actualFrame.map { framesAreClose($0, windowFrame) } ?? false
+            resolvedFrame = useActualFrame ? (actualFrame ?? windowFrame) : windowFrame
+        }
 
         let screenPoint = CGPoint(
             x: resolvedFrame.origin.x + event.location.x * resolvedFrame.width,
@@ -71,7 +78,8 @@ extension MirageHostInputController {
             break
         }
 
-        postEvent(cgEvent)
+        applyTabletFieldsIfNeeded(cgEvent, from: event, type: type, point: screenPoint)
+        postStylusAwarePointerEvent(cgEvent, from: event, type: type, at: screenPoint)
     }
 }
 
