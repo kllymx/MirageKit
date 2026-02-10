@@ -123,6 +123,7 @@ extension MirageHostService {
                 colorSpace: request.colorSpace,
                 captureQueueDepth: request.captureQueueDepth,
                 bitrate: request.bitrate,
+                disableResolutionCap: request.disableResolutionCap ?? false,
                 streamScale: request.streamScale,
                 audioConfiguration: audioConfiguration,
                 latencyMode: latencyMode,

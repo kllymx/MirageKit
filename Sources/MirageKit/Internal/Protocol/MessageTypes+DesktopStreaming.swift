@@ -33,6 +33,8 @@ package struct StartDesktopStreamMessage: Codable {
     package var mode: MirageDesktopStreamMode?
     /// Client-requested target bitrate (bits per second)
     package var bitrate: Int?
+    /// Client-requested override to bypass host/client resolution caps.
+    package var disableResolutionCap: Bool?
     /// Client-requested stream scale (0.1-1.0)
     package let streamScale: CGFloat?
     /// Client latency preference for buffering behavior
@@ -58,6 +60,7 @@ package struct StartDesktopStreamMessage: Codable {
         case captureQueueDepth
         case mode
         case bitrate
+        case disableResolutionCap
         case streamScale
         case latencyMode
         case audioConfiguration
@@ -75,6 +78,7 @@ package struct StartDesktopStreamMessage: Codable {
         captureQueueDepth: Int? = nil,
         mode: MirageDesktopStreamMode? = nil,
         bitrate: Int? = nil,
+        disableResolutionCap: Bool? = nil,
         streamScale: CGFloat? = nil,
         latencyMode: MirageStreamLatencyMode? = nil,
         audioConfiguration: MirageAudioConfiguration? = nil,
@@ -90,6 +94,7 @@ package struct StartDesktopStreamMessage: Codable {
         self.captureQueueDepth = captureQueueDepth
         self.mode = mode
         self.bitrate = bitrate
+        self.disableResolutionCap = disableResolutionCap
         self.streamScale = streamScale
         self.latencyMode = latencyMode
         self.audioConfiguration = audioConfiguration

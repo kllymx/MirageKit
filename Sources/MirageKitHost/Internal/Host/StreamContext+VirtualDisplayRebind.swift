@@ -115,7 +115,10 @@ extension StreamContext {
 
         let displayBounds = CGVirtualDisplayBridge.getDisplayBounds(
             newContext.displayID,
-            knownResolution: newContext.resolution
+            knownResolution: SharedVirtualDisplayManager.logicalResolution(
+                for: newContext.resolution,
+                scaleFactor: newContext.scaleFactor
+            )
         )
         try await WindowSpaceManager.shared.moveWindow(
             windowID,
@@ -132,7 +135,7 @@ extension StreamContext {
         )
 
         let scWindow = targets.window.window
-        let captureScaleFactor: CGFloat = 2.0
+        let captureScaleFactor = max(1.0, newContext.scaleFactor)
         let captureTarget = streamTargetDimensions(windowFrame: scWindow.frame, scaleFactor: captureScaleFactor)
         baseCaptureSize = CGSize(width: captureTarget.width, height: captureTarget.height)
         streamScale = resolvedStreamScale(
@@ -170,7 +173,7 @@ extension StreamContext {
             window: targets.window.window,
             application: targets.application.application,
             display: targets.display.display,
-            knownScaleFactor: 2.0,
+            knownScaleFactor: captureScaleFactor,
             outputScale: streamScale
         ) { [weak self] frame in
             self?.enqueueCapturedFrame(frame)

@@ -66,6 +66,7 @@ extension MirageHostService {
                 let pixelFormat = request.pixelFormat
                 let colorSpace = request.colorSpace
                 let bitrate = request.bitrate
+                let disableResolutionCap = request.disableResolutionCap ?? false
                 let requestedScale = request.streamScale ?? 1.0
                 let latencyMode = request.latencyMode ?? .smoothest
                 let audioConfiguration = request.audioConfiguration ?? .default
@@ -74,7 +75,7 @@ extension MirageHostService {
                         "Frame rate: \(targetFrameRate)fps (client max=\(clientMaxRefreshRate)Hz)"
                     )
 
-                try await startStream(
+                _ = try await startStream(
                     for: window,
                     to: client,
                     dataPort: request.dataPort,
@@ -87,6 +88,7 @@ extension MirageHostService {
                     colorSpace: colorSpace,
                     captureQueueDepth: request.captureQueueDepth,
                     bitrate: bitrate,
+                    disableResolutionCap: disableResolutionCap,
                     audioConfiguration: audioConfiguration
                 )
             } catch {

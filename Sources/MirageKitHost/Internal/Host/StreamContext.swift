@@ -237,6 +237,8 @@ actor StreamContext {
     let useLowLatencyPipeline: Bool
     /// Client-requested stream scale.
     var requestedStreamScale: CGFloat
+    /// When true, bypasses the host-side encoded-dimension cap.
+    let disableResolutionCap: Bool
 
     init(
         streamID: StreamID,
@@ -245,6 +247,7 @@ actor StreamContext {
         streamScale: CGFloat = 1.0,
         maxPacketSize: Int = mirageDefaultMaxPacketSize,
         additionalFrameFlags: FrameFlags = [],
+        disableResolutionCap: Bool = false,
         latencyMode: MirageStreamLatencyMode = .smoothest
     ) {
         self.streamID = streamID
@@ -259,6 +262,7 @@ actor StreamContext {
         currentFrameRate = encoderConfig.targetFrameRate
         captureFrameRateOverride = nil
         captureFrameRate = encoderConfig.targetFrameRate
+        self.disableResolutionCap = disableResolutionCap
         activePixelFormat = encoderConfig.pixelFormat
         let prefersSmoothness = latencyMode == .smoothest
         let latencySensitive = latencyMode == .lowestLatency

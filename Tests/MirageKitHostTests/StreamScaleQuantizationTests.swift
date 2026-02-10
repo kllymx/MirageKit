@@ -61,10 +61,27 @@ struct StreamScaleQuantizationTests {
         #expect(width == 3840)
         #expect(height == 2880)
     }
+
+    @Test("Uncapped mode preserves requested scale")
+    func uncappedModePreservesScale() {
+        let baseSize = CGSize(width: 6016, height: 3384)
+        let resolvedScale = resolvedStreamScale(
+            baseSize: baseSize,
+            requestedScale: 1.0,
+            disableResolutionCap: true
+        )
+
+        #expect(abs(resolvedScale - 1.0) < 0.0001)
+    }
 }
 
-private func resolvedStreamScale(baseSize: CGSize, requestedScale: CGFloat) -> CGFloat {
+private func resolvedStreamScale(
+    baseSize: CGSize,
+    requestedScale: CGFloat,
+    disableResolutionCap: Bool = false
+) -> CGFloat {
     let clamped = StreamContext.clampStreamScale(requestedScale)
+    if disableResolutionCap { return clamped }
     let maxScale = min(
         1.0,
         StreamContext.maxEncodedWidth / baseSize.width,

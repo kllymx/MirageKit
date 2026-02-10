@@ -20,6 +20,7 @@ extension SharedVirtualDisplayManager {
             displayID: display.displayID,
             spaceID: display.spaceID,
             resolution: display.resolution,
+            scaleFactor: display.scaleFactor,
             refreshRate: display.refreshRate,
             colorSpace: display.colorSpace,
             generation: display.generation,
@@ -57,7 +58,10 @@ extension SharedVirtualDisplayManager {
     /// Uses the known logical resolution instead of CGDisplayBounds (which can return stale values for new displays).
     func getDisplayBounds() -> CGRect? {
         guard let display = sharedDisplay else { return nil }
-        let logicalResolution = SharedVirtualDisplayManager.logicalResolution(for: display.resolution)
+        let logicalResolution = SharedVirtualDisplayManager.logicalResolution(
+            for: display.resolution,
+            scaleFactor: display.scaleFactor
+        )
         return CGVirtualDisplayBridge.getDisplayBounds(display.displayID, knownResolution: logicalResolution)
     }
 

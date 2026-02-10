@@ -72,7 +72,9 @@ extension MirageHostInputController {
 
         let clientAspectRatio = event.aspectRatio
         let isOnVirtualDisplay = hostService?.isStreamUsingVirtualDisplay(windowID: window.id) ?? false
-        let hostScale: CGFloat = isOnVirtualDisplay ? 2.0 : (NSScreen.main?.backingScaleFactor ?? 2.0)
+        let hostScale: CGFloat = isOnVirtualDisplay
+            ? (hostService?.currentVirtualDisplayScaleFactor() ?? 2.0)
+            : (NSScreen.main?.backingScaleFactor ?? 2.0)
 
         let initialTargetSize: CGSize
         if event.pixelWidth > 0, event.pixelHeight > 0 {

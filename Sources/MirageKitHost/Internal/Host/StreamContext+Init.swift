@@ -23,6 +23,7 @@ extension StreamContext {
     -> CGFloat {
         let clampedRequested = StreamContext.clampStreamScale(requestedScale)
         guard baseSize.width > 0, baseSize.height > 0 else { return clampedRequested }
+        if disableResolutionCap { return clampedRequested }
 
         let maxScale = min(
             1.0,

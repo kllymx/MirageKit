@@ -72,6 +72,7 @@ extension MirageHostService {
         let targetFrameRate = await existingContext?.getTargetFrameRate()
         let audioConfiguration = audioConfigurationByClientID[session.clientID] ?? .default
         let usesVirtualDisplay = await existingContext?.isUsingVirtualDisplay() ?? false
+        let disableResolutionCap = await existingContext?.isResolutionCapDisabled() ?? false
         let sharedDisplayResolution: CGSize? = if usesVirtualDisplay {
             await SharedVirtualDisplayManager.shared.getDisplayBounds()?.size
         } else {
@@ -103,6 +104,7 @@ extension MirageHostService {
                         colorSpace: encoderSettings?.colorSpace,
                         captureQueueDepth: encoderSettings?.captureQueueDepth,
                         bitrate: encoderSettings?.bitrate,
+                        disableResolutionCap: disableResolutionCap,
                         audioConfiguration: audioConfiguration
                     )
 
@@ -158,6 +160,7 @@ extension MirageHostService {
                 colorSpace: encoderSettings?.colorSpace,
                 captureQueueDepth: encoderSettings?.captureQueueDepth,
                 bitrate: encoderSettings?.bitrate,
+                disableResolutionCap: disableResolutionCap,
                 audioConfiguration: audioConfiguration
             )
 

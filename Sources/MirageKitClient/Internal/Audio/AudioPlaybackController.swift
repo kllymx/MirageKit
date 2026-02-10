@@ -26,6 +26,9 @@ final class AudioPlaybackController {
     private var scheduledDurationSeconds: Double = 0
     private var hasStartedPlayback = false
     private var isConfigured = false
+#if os(iOS) || os(visionOS)
+    private var audioSessionConfigured = false
+#endif
 
     init(startupBufferSeconds: Double = 0.150, maxQueuedSeconds: Double = 0.750) {
         self.startupBufferSeconds = max(0, startupBufferSeconds)
@@ -45,6 +48,9 @@ final class AudioPlaybackController {
         isConfigured = false
         configuredSampleRate = 0
         configuredChannelCount = 0
+#if os(iOS) || os(visionOS)
+        deactivateAudioSessionIfNeeded()
+#endif
     }
 
     func preferredChannelCount(for incomingChannelCount: Int) -> Int {
@@ -102,6 +108,9 @@ final class AudioPlaybackController {
         }
 
         engine.connect(playerNode, to: engine.mainMixerNode, format: format)
+#if os(iOS) || os(visionOS)
+        guard configureAudioSessionIfNeeded() else { return false }
+#endif
         do {
             try engine.start()
         } catch {
@@ -175,4 +184,30 @@ final class AudioPlaybackController {
     private func startPlayerIfNeeded() {
         if !playerNode.isPlaying { playerNode.play() }
     }
+
+#if os(iOS) || os(visionOS)
+    private func configureAudioSessionIfNeeded() -> Bool {
+        if audioSessionConfigured { return true }
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, options: [.mixWithOthers])
+            try session.setActive(true, options: [])
+            audioSessionConfigured = true
+            return true
+        } catch {
+            MirageLogger.error(.client, "Audio session setup failed: \(error)")
+            return false
+        }
+    }
+
+    private func deactivateAudioSessionIfNeeded() {
+        guard audioSessionConfigured else { return }
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        } catch {
+            MirageLogger.debug(.client, "Audio session deactivation failed: \(error)")
+        }
+        audioSessionConfigured = false
+    }
+#endif
 }

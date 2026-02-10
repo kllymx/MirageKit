@@ -9,6 +9,7 @@
 
 import Foundation
 import MirageKit
+import CoreGraphics
 
 #if os(macOS)
 @MainActor
@@ -22,6 +23,10 @@ public extension MirageHostService {
     func getVirtualDisplayBounds(windowID: WindowID) -> CGRect? {
         guard windowsUsingVirtualDisplay.contains(windowID) else { return nil }
         return sharedVirtualDisplayBounds
+    }
+
+    func currentVirtualDisplayScaleFactor() -> CGFloat {
+        max(1.0, sharedVirtualDisplayScaleFactor)
     }
 
     /// Update the cached window frame for input coordinate translation.

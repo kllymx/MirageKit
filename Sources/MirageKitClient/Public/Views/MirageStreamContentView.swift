@@ -22,6 +22,7 @@ public struct MirageStreamContentView: View {
     public let isDesktopStream: Bool
     public let desktopStreamMode: MirageDesktopStreamMode
     public let onExitDesktopStream: (() -> Void)?
+    public let onInputActivity: ((MirageInputEvent) -> Void)?
     public let onHardwareKeyboardPresenceChanged: ((Bool) -> Void)?
     public let onSoftwareKeyboardVisibilityChanged: ((Bool) -> Void)?
     public let dockSnapEnabled: Bool
@@ -64,6 +65,7 @@ public struct MirageStreamContentView: View {
     ///   - isDesktopStream: Whether the stream represents a desktop session.
     ///   - desktopStreamMode: Desktop stream mode (mirrored vs secondary display).
     ///   - onExitDesktopStream: Optional handler for the desktop exit shortcut.
+    ///   - onInputActivity: Optional callback invoked for each locally captured input event.
     ///   - onHardwareKeyboardPresenceChanged: Optional handler for hardware keyboard availability.
     ///   - onSoftwareKeyboardVisibilityChanged: Optional handler for software keyboard visibility.
     ///   - dockSnapEnabled: Whether input should snap to the dock edge on iPadOS.
@@ -78,6 +80,7 @@ public struct MirageStreamContentView: View {
         isDesktopStream: Bool = false,
         desktopStreamMode: MirageDesktopStreamMode = .mirrored,
         onExitDesktopStream: (() -> Void)? = nil,
+        onInputActivity: ((MirageInputEvent) -> Void)? = nil,
         onHardwareKeyboardPresenceChanged: ((Bool) -> Void)? = nil,
         onSoftwareKeyboardVisibilityChanged: ((Bool) -> Void)? = nil,
         dockSnapEnabled: Bool = false,
@@ -93,6 +96,7 @@ public struct MirageStreamContentView: View {
         self.isDesktopStream = isDesktopStream
         self.desktopStreamMode = desktopStreamMode
         self.onExitDesktopStream = onExitDesktopStream
+        self.onInputActivity = onInputActivity
         self.onHardwareKeyboardPresenceChanged = onHardwareKeyboardPresenceChanged
         self.onSoftwareKeyboardVisibilityChanged = onSoftwareKeyboardVisibilityChanged
         self.dockSnapEnabled = dockSnapEnabled
@@ -212,6 +216,8 @@ public struct MirageStreamContentView: View {
     }
 
     private func sendInputEvent(_ event: MirageInputEvent) {
+        onInputActivity?(event)
+
         if case let .keyDown(keyEvent) = event,
            keyEvent.keyCode == 0x35,
            keyEvent.modifiers.contains(.control),
@@ -348,9 +354,11 @@ public struct MirageStreamContentView: View {
             latestDrawableDisplaySize = preferredDisplaySize
 
             let acknowledgedPixelSize = currentDesktopAcknowledgedPixelSize()
+            let pointScale = desktopPointScale(for: preferredDisplaySize)
             switch desktopResizeRequestDecision(
                 targetDisplaySize: preferredDisplaySize,
                 acknowledgedPixelSize: acknowledgedPixelSize,
+                pointScale: pointScale,
                 mismatchThresholdPoints: desktopResizeConvergenceTolerance
             ) {
             case .skipNoOp:
@@ -417,15 +425,16 @@ public struct MirageStreamContentView: View {
         guard awaitingDesktopResizeAck else { return }
         guard let minSize, minSize.width > 0, minSize.height > 0 else { return }
 
-        let acknowledgedDisplaySize = CGSize(
-            width: minSize.width / 2.0,
-            height: minSize.height / 2.0
-        )
         let targetDisplaySize: CGSize = if latestDrawableDisplaySize.width > 0, latestDrawableDisplaySize.height > 0 {
             latestDrawableDisplaySize
         } else {
             lastSentDisplayResolution
         }
+        let pointScale = desktopPointScale(for: targetDisplaySize)
+        let acknowledgedDisplaySize = CGSize(
+            width: minSize.width / pointScale,
+            height: minSize.height / pointScale
+        )
 
         switch desktopResizeAckDecision(
             acknowledgedDisplaySize: acknowledgedDisplaySize,
@@ -471,6 +480,36 @@ public struct MirageStreamContentView: View {
         return .zero
     }
 
+    private func resolvedDesktopStreamScale(for viewSize: CGSize) -> CGFloat {
+        guard let maxDrawableSize,
+              maxDrawableSize.width > 0,
+              maxDrawableSize.height > 0,
+              viewSize.width > 0,
+              viewSize.height > 0 else {
+            return 1.0
+        }
+
+        let basePoints = clientService.scaledDisplayResolution(viewSize)
+        guard basePoints.width > 0, basePoints.height > 0 else { return 1.0 }
+
+        let virtualDisplayScaleFactor: CGFloat = 2.0
+        let basePixels = CGSize(
+            width: basePoints.width * virtualDisplayScaleFactor,
+            height: basePoints.height * virtualDisplayScaleFactor
+        )
+        guard basePixels.width > 0, basePixels.height > 0 else { return 1.0 }
+
+        let widthScale = maxDrawableSize.width / basePixels.width
+        let heightScale = maxDrawableSize.height / basePixels.height
+        return clientService.clampStreamScale(min(1.0, widthScale, heightScale))
+    }
+
+    private func desktopPointScale(for displaySize: CGSize) -> CGFloat {
+        let virtualDisplayScaleFactor: CGFloat = 2.0
+        let streamScale = resolvedDesktopStreamScale(for: displaySize)
+        return max(1.0, virtualDisplayScaleFactor * streamScale)
+    }
+
     private func scheduleStreamScaleUpdate(for viewSize: CGSize) {
         guard let maxDrawableSize,
               maxDrawableSize.width > 0,
@@ -488,9 +527,7 @@ public struct MirageStreamContentView: View {
             width: basePoints.width * virtualDisplayScaleFactor,
             height: basePoints.height * virtualDisplayScaleFactor
         )
-        let widthScale = maxDrawableSize.width / basePixels.width
-        let heightScale = maxDrawableSize.height / basePixels.height
-        let clampedScale = clientService.clampStreamScale(min(1.0, widthScale, heightScale))
+        let clampedScale = resolvedDesktopStreamScale(for: viewSize)
 
         let rawTargetSize = CGSize(
             width: basePixels.width * clampedScale,

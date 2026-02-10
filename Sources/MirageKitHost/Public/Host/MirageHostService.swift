@@ -112,6 +112,7 @@ public final class MirageHostService {
     // Single bounds since all windows share one virtual display
     var sharedVirtualDisplayBounds: CGRect?
     var sharedVirtualDisplayGeneration: UInt64 = 0
+    var sharedVirtualDisplayScaleFactor: CGFloat = 2.0
 
     /// Track which windows are using the shared virtual display
     var windowsUsingVirtualDisplay: Set<WindowID> = []

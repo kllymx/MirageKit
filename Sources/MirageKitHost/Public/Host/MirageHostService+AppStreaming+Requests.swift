@@ -61,6 +61,7 @@ extension MirageHostService {
             let pixelFormat = request.pixelFormat
             let colorSpace = request.colorSpace
             let bitrate = request.bitrate
+            let disableResolutionCap = request.disableResolutionCap ?? false
             let streamScale = request.streamScale ?? 1.0
             let latencyMode = request.latencyMode ?? .smoothest
             let audioConfiguration = request.audioConfiguration ?? .default
@@ -140,6 +141,7 @@ extension MirageHostService {
                         colorSpace: colorSpace,
                         captureQueueDepth: request.captureQueueDepth,
                         bitrate: bitrate,
+                        disableResolutionCap: disableResolutionCap,
                         audioConfiguration: audioConfiguration
                     )
 

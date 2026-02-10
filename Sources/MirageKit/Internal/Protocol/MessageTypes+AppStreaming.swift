@@ -55,6 +55,8 @@ package struct SelectAppMessage: Codable {
     package var captureQueueDepth: Int?
     /// Client-requested target bitrate (bits per second)
     package var bitrate: Int?
+    /// Client-requested override to bypass host/client resolution caps.
+    package var disableResolutionCap: Bool?
     /// Client-requested stream scale (0.1-1.0)
     package let streamScale: CGFloat?
     /// Client latency preference for buffering behavior
@@ -77,6 +79,7 @@ package struct SelectAppMessage: Codable {
         case colorSpace
         case captureQueueDepth
         case bitrate
+        case disableResolutionCap
         case streamScale
         case latencyMode
         case audioConfiguration
@@ -94,6 +97,7 @@ package struct SelectAppMessage: Codable {
         colorSpace: MirageColorSpace? = nil,
         captureQueueDepth: Int? = nil,
         bitrate: Int? = nil,
+        disableResolutionCap: Bool? = nil,
         streamScale: CGFloat? = nil,
         latencyMode: MirageStreamLatencyMode? = nil,
         audioConfiguration: MirageAudioConfiguration? = nil
@@ -109,6 +113,7 @@ package struct SelectAppMessage: Codable {
         self.colorSpace = colorSpace
         self.captureQueueDepth = captureQueueDepth
         self.bitrate = bitrate
+        self.disableResolutionCap = disableResolutionCap
         self.streamScale = streamScale
         self.latencyMode = latencyMode
         self.audioConfiguration = audioConfiguration

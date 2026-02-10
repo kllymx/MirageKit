@@ -15,13 +15,49 @@ import Foundation
 extension SharedVirtualDisplayManager {
     // MARK: - Private Helpers
 
-    static func logicalResolution(for pixelResolution: CGSize) -> CGSize {
+    static func logicalResolution(for pixelResolution: CGSize, scaleFactor: CGFloat = 2.0) -> CGSize {
         guard pixelResolution.width > 0, pixelResolution.height > 0 else { return pixelResolution }
-        let scale: CGFloat = 2.0
+        let scale = max(1.0, scaleFactor)
         return CGSize(
             width: pixelResolution.width / scale,
             height: pixelResolution.height / scale
         )
+    }
+
+    static func fallbackResolution(for retinaResolution: CGSize) -> CGSize {
+        let width = CGFloat(StreamContext.alignedEvenPixel(max(2.0, retinaResolution.width / 2.0)))
+        let height = CGFloat(StreamContext.alignedEvenPixel(max(2.0, retinaResolution.height / 2.0)))
+        return CGSize(width: width, height: height)
+    }
+
+    private func resolvedScaleFactor(displayID: CGDirectDisplayID, fallback: CGFloat) -> CGFloat {
+        if let modeSizes = CGVirtualDisplayBridge.currentDisplayModeSizes(displayID),
+           modeSizes.logical.width > 0,
+           modeSizes.logical.height > 0,
+           modeSizes.pixel.width > 0,
+           modeSizes.pixel.height > 0 {
+            let scale = modeSizes.pixel.width / modeSizes.logical.width
+            if scale > 0 { return scale }
+        }
+        return fallback
+    }
+
+    private func resetFallbackStreak(for colorSpace: MirageColorSpace) {
+        fallbackStreakByColorSpace[colorSpace] = 0
+    }
+
+    private func registerFallbackEvent(for colorSpace: MirageColorSpace) {
+        let streak = (fallbackStreakByColorSpace[colorSpace] ?? 0) + 1
+        fallbackStreakByColorSpace[colorSpace] = streak
+        CGVirtualDisplayBridge.clearPreferredDescriptorProfile(for: colorSpace)
+        MirageLogger.host("Virtual display non-Retina fallback streak for \(colorSpace.displayName): \(streak)")
+
+        let rotationThreshold = 3
+        if streak >= rotationThreshold {
+            CGVirtualDisplayBridge.invalidatePersistentSerial(for: colorSpace)
+            fallbackStreakByColorSpace[colorSpace] = 0
+            MirageLogger.host("Virtual display fallback streak reached threshold; serial slot rotated")
+        }
     }
 
     func notifyGenerationChangeIfNeeded(previousGeneration: UInt64) {
@@ -134,19 +170,22 @@ extension SharedVirtualDisplayManager {
         guard let display = sharedDisplay else { return false }
         guard display.colorSpace == colorSpace else { return false }
 
+        let useHiDPI = display.scaleFactor > 1.5
         let success = CGVirtualDisplayBridge.updateDisplayResolution(
             display: display.displayRef.value,
             width: Int(newResolution.width),
             height: Int(newResolution.height),
             refreshRate: Double(refreshRate),
-            hiDPI: true
+            hiDPI: useHiDPI
         )
 
         if success {
+            let updatedScaleFactor = resolvedScaleFactor(displayID: display.displayID, fallback: display.scaleFactor)
             sharedDisplay = ManagedDisplayContext(
                 displayID: display.displayID,
                 spaceID: display.spaceID,
                 resolution: newResolution,
+                scaleFactor: updatedScaleFactor,
                 refreshRate: Double(refreshRate),
                 colorSpace: display.colorSpace,
                 generation: display.generation,
@@ -177,87 +216,112 @@ extension SharedVirtualDisplayManager {
         let generation = displayGeneration
         let displayName = "Mirage Shared Display (#\(displayCounter))"
 
-        let logicalResolution = SharedVirtualDisplayManager.logicalResolution(for: resolution)
-        var displayID: CGDirectDisplayID = 0
-        var displayRefreshRate = Double(refreshRate)
-        var displayColorSpace = colorSpace
-        var spaceID: CGSSpaceID = 0
-        var readyBounds = CGRect.zero
+        let attempts: [(resolution: CGSize, hiDPI: Bool)] = [
+            (resolution, true),
+            (SharedVirtualDisplayManager.fallbackResolution(for: resolution), false),
+        ]
 
-        guard let displayContext = CGVirtualDisplayBridge.createVirtualDisplay(
-            name: displayName,
-            width: Int(resolution.width),
-            height: Int(resolution.height),
-            refreshRate: Double(refreshRate),
-            hiDPI: true,
-            colorSpace: colorSpace
-        ) else {
-            throw SharedDisplayError.creationFailed("Virtual display failed Retina activation")
-        }
-
-        displayID = displayContext.displayID
-        displayRefreshRate = displayContext.refreshRate
-        displayColorSpace = displayContext.colorSpace
-
-        guard let readyBoundsValue = await CGVirtualDisplayBridge.waitForDisplayReady(
-            displayContext.displayID,
-            expectedResolution: logicalResolution,
-            alternateExpectedResolution: resolution
-        ) else {
-            throw SharedDisplayError.creationFailed("Display \(displayContext.displayID) did not become ready")
-        }
-        readyBounds = readyBoundsValue
-
-        let enforced = CGVirtualDisplayBridge.updateDisplayResolution(
-            display: displayContext.display,
-            width: Int(resolution.width),
-            height: Int(resolution.height),
-            refreshRate: Double(refreshRate),
-            hiDPI: true
-        )
-        guard enforced else {
-            throw SharedDisplayError.creationFailed("Virtual display failed Retina activation")
-        }
-
-        spaceID = CGVirtualDisplayBridge.getSpaceForDisplay(displayContext.displayID)
-        guard spaceID != 0 else { throw SharedDisplayError.spaceNotFound(displayContext.displayID) }
-
-        let isValid = await validateDisplayMode(
-            displayID: displayID,
-            expectedLogicalResolution: logicalResolution,
-            expectedPixelResolution: resolution
-        )
-        guard isValid else {
-            MirageLogger.error(.host, "Virtual display \(displayID) failed strict Retina validation")
-            CGVirtualDisplayBridge.configuredDisplayOrigins.removeValue(forKey: displayID)
-            throw SharedDisplayError.creationFailed("Virtual display failed Retina activation")
-        }
-
-        let managedContext = ManagedDisplayContext(
-            displayID: displayContext.displayID,
-            spaceID: spaceID,
-            resolution: resolution,
-            refreshRate: displayContext.refreshRate,
-            colorSpace: displayContext.colorSpace,
-            generation: generation,
-            createdAt: Date(),
-            displayRef: UncheckedSendableBox(displayContext.display)
-        )
-
-        MirageLogger
-            .host(
-                "Created shared virtual display: \(Int(resolution.width))x\(Int(resolution.height))@\(refreshRate)Hz, color=\(displayColorSpace.displayName), displayID=\(displayID), spaceID=\(spaceID), generation=\(generation), bounds=\(readyBounds)"
+        for attempt in attempts {
+            let requestedResolution = attempt.resolution
+            let expectedLogical = SharedVirtualDisplayManager.logicalResolution(
+                for: requestedResolution,
+                scaleFactor: attempt.hiDPI ? 2.0 : 1.0
             )
+            let expectedPixel = requestedResolution
 
-        await MainActor.run {
-            VirtualDisplayKeepaliveController.shared.start(
-                displayID: displayID,
+            guard let displayContext = CGVirtualDisplayBridge.createVirtualDisplay(
+                name: displayName,
+                width: Int(requestedResolution.width),
+                height: Int(requestedResolution.height),
+                refreshRate: Double(refreshRate),
+                hiDPI: attempt.hiDPI,
+                colorSpace: colorSpace
+            ) else {
+                continue
+            }
+
+            let invalidateSelector = NSSelectorFromString("invalidate")
+            func invalidateAttemptDisplay() {
+                if (displayContext.display as AnyObject).responds(to: invalidateSelector) {
+                    _ = (displayContext.display as AnyObject).perform(invalidateSelector)
+                }
+                CGVirtualDisplayBridge.configuredDisplayOrigins.removeValue(forKey: displayContext.displayID)
+            }
+
+            guard await CGVirtualDisplayBridge.waitForDisplayReady(
+                displayContext.displayID,
+                expectedResolution: expectedLogical,
+                alternateExpectedResolution: expectedPixel
+            ) != nil else {
+                invalidateAttemptDisplay()
+                continue
+            }
+
+            let enforced = CGVirtualDisplayBridge.updateDisplayResolution(
+                display: displayContext.display,
+                width: Int(requestedResolution.width),
+                height: Int(requestedResolution.height),
+                refreshRate: Double(refreshRate),
+                hiDPI: attempt.hiDPI
+            )
+            guard enforced else {
+                invalidateAttemptDisplay()
+                continue
+            }
+
+            let spaceID = CGVirtualDisplayBridge.getSpaceForDisplay(displayContext.displayID)
+            guard spaceID != 0 else {
+                invalidateAttemptDisplay()
+                throw SharedDisplayError.spaceNotFound(displayContext.displayID)
+            }
+
+            let isValid = await validateDisplayMode(
+                displayID: displayContext.displayID,
+                expectedLogicalResolution: expectedLogical,
+                expectedPixelResolution: expectedPixel
+            )
+            guard isValid else {
+                invalidateAttemptDisplay()
+                continue
+            }
+
+            let displayScaleFactor = resolvedScaleFactor(
+                displayID: displayContext.displayID,
+                fallback: attempt.hiDPI ? 2.0 : 1.0
+            )
+            let managedContext = ManagedDisplayContext(
+                displayID: displayContext.displayID,
                 spaceID: spaceID,
-                refreshRate: displayRefreshRate
+                resolution: requestedResolution,
+                scaleFactor: displayScaleFactor,
+                refreshRate: displayContext.refreshRate,
+                colorSpace: displayContext.colorSpace,
+                generation: generation,
+                createdAt: Date(),
+                displayRef: UncheckedSendableBox(displayContext.display)
             )
+
+            if !attempt.hiDPI {
+                MirageLogger.host(
+                    "Created shared virtual display using non-Retina fallback at \(Int(requestedResolution.width))x\(Int(requestedResolution.height)) px"
+                )
+                registerFallbackEvent(for: colorSpace)
+            } else {
+                resetFallbackStreak(for: colorSpace)
+            }
+
+            await MainActor.run {
+                VirtualDisplayKeepaliveController.shared.start(
+                    displayID: displayContext.displayID,
+                    spaceID: spaceID,
+                    refreshRate: displayContext.refreshRate
+                )
+            }
+
+            return managedContext
         }
 
-        return managedContext
+        throw SharedDisplayError.creationFailed("Virtual display failed Retina activation")
     }
 
     /// Recreate the display at a new resolution

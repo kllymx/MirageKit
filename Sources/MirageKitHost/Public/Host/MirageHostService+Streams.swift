@@ -28,6 +28,7 @@ public extension MirageHostService {
         colorSpace: MirageColorSpace? = nil,
         captureQueueDepth: Int? = nil,
         bitrate: Int? = nil,
+        disableResolutionCap: Bool = false,
         audioConfiguration: MirageAudioConfiguration? = nil
         // hdr: Bool = false
     )
@@ -91,8 +92,12 @@ public extension MirageHostService {
             encoderConfig: effectiveEncoderConfig,
             streamScale: streamScale ?? 1.0,
             maxPacketSize: networkConfig.maxPacketSize,
+            disableResolutionCap: disableResolutionCap,
             latencyMode: latencyMode
         )
+        if disableResolutionCap {
+            MirageLogger.host("Resolution cap disabled for stream \(streamID)")
+        }
         await context.setMetricsUpdateHandler { [weak self] metrics in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -183,9 +188,11 @@ public extension MirageHostService {
                         // where the window centering timer fires before bounds are cached
                         guard let self else { return }
                         let generation = await SharedVirtualDisplayManager.shared.getDisplayGeneration()
+                        let scale = await SharedVirtualDisplayManager.shared.getDisplaySnapshot()?.scaleFactor ?? 2.0
                         await MainActor.run {
                             self.sharedVirtualDisplayBounds = bounds
                             self.sharedVirtualDisplayGeneration = generation
+                            self.sharedVirtualDisplayScaleFactor = max(1.0, scale)
                             self.windowsUsingVirtualDisplay.insert(window.id)
                             MirageLogger.host("Cached virtual display bounds immediately: \(bounds)")
                         }
@@ -326,7 +333,10 @@ public extension MirageHostService {
         windowsUsingVirtualDisplay.remove(windowID)
 
         // Clear shared bounds if no more windows using virtual display
-        if windowsUsingVirtualDisplay.isEmpty { sharedVirtualDisplayBounds = nil }
+        if windowsUsingVirtualDisplay.isEmpty {
+            sharedVirtualDisplayBounds = nil
+            sharedVirtualDisplayScaleFactor = 2.0
+        }
 
         await context.stop()
         streamsByID.removeValue(forKey: session.id)

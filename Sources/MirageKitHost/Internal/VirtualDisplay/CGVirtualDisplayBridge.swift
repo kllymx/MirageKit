@@ -89,6 +89,7 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         let resolution: CGSize
         let refreshRate: Double
         let colorSpace: MirageColorSpace
+        let scaleFactor: CGFloat
     }
 
     // MARK: - Initialization
@@ -242,10 +243,7 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
             return nil
         }
 
-        if hiDPI {
-            return profile == .persistentGlobalQueue || profile == .serial0GlobalQueue ? profile : nil
-        }
-
+        if hiDPI { return profile }
         return profile == .persistentMainQueue ? profile : nil
     }
 
@@ -256,13 +254,19 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         UserDefaults.standard.set(profile.rawValue, forKey: descriptorProfileDefaultsKey(for: colorSpace))
     }
 
+    static func clearPreferredDescriptorProfile(for colorSpace: MirageColorSpace) {
+        UserDefaults.standard.removeObject(forKey: descriptorProfileDefaultsKey(for: colorSpace))
+    }
+
     private static func descriptorAttempts(
         persistentSerial: UInt32,
         hiDPI: Bool,
         colorSpace: MirageColorSpace
     )
     -> [DescriptorAttempt] {
-        let defaults: [DescriptorProfile] = hiDPI ? [.persistentGlobalQueue, .serial0GlobalQueue] : [.persistentMainQueue]
+        let defaults: [DescriptorProfile] = hiDPI
+            ? [.persistentGlobalQueue, .serial0GlobalQueue, .persistentMainQueue]
+            : [.persistentMainQueue]
         var orderedProfiles: [DescriptorProfile] = []
 
         if let preferred = preferredDescriptorProfile(for: colorSpace, hiDPI: hiDPI) {
@@ -350,7 +354,7 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
                 hiDPISetting: attempt.hiDPISetting,
                 serial: serial
             ) {
-                MirageLogger.host("Virtual display Retina activation succeeded with attempt \(attempt.label)")
+                MirageLogger.host("Virtual display mode activation succeeded with attempt \(attempt.label)")
                 return true
             }
         }
@@ -587,7 +591,8 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
                     displayID: displayID,
                     resolution: CGSize(width: width, height: height),
                     refreshRate: refreshRate,
-                    colorSpace: colorSpace
+                    colorSpace: colorSpace,
+                    scaleFactor: resolvedScaleFactor(displayID: displayID, hiDPI: hiDPI)
                 )
             }
 
@@ -601,7 +606,11 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
             }
         }
 
-        MirageLogger.error(.host, "Virtual display failed Retina activation for all descriptor profiles")
+        if hiDPI {
+            MirageLogger.error(.host, "Virtual display failed Retina activation for all descriptor profiles")
+        } else {
+            MirageLogger.error(.host, "Virtual display failed 1x activation for all descriptor profiles")
+        }
         return nil
     }
 
@@ -681,6 +690,7 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
 
         let serial = serialNumber(for: colorSpace, slot: slot)
         cachedSerialNumbers[colorSpace] = serial
+        clearPreferredDescriptorProfile(for: colorSpace)
         MirageLogger.host(
             "Rotated virtual display serial for \(colorSpace.displayName) to slot \(slot.rawValue) (\(serial))"
         )
@@ -690,6 +700,18 @@ final class CGVirtualDisplayBridge: @unchecked Sendable {
         for colorSpace in MirageColorSpace.allCases {
             invalidatePersistentSerial(for: colorSpace)
         }
+    }
+
+    private static func resolvedScaleFactor(displayID: CGDirectDisplayID, hiDPI: Bool) -> CGFloat {
+        if let observed = currentDisplayModeSizes(displayID),
+           observed.logical.width > 0,
+           observed.logical.height > 0,
+           observed.pixel.width > 0,
+           observed.pixel.height > 0 {
+            let scale = observed.pixel.width / observed.logical.width
+            if scale > 0 { return scale }
+        }
+        return hiDPI ? 2.0 : 1.0
     }
 
     /// Update an existing virtual display's resolution without recreating it

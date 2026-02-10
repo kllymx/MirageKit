@@ -25,10 +25,14 @@ extension MirageHostService {
 
         let displayBounds = CGVirtualDisplayBridge.getDisplayBounds(
             newContext.displayID,
-            knownResolution: SharedVirtualDisplayManager.logicalResolution(for: newContext.resolution)
+            knownResolution: SharedVirtualDisplayManager.logicalResolution(
+                for: newContext.resolution,
+                scaleFactor: newContext.scaleFactor
+            )
         )
         sharedVirtualDisplayBounds = displayBounds
         sharedVirtualDisplayGeneration = newContext.generation
+        sharedVirtualDisplayScaleFactor = max(1.0, newContext.scaleFactor)
         MirageLogger
             .host(
                 "Shared display generation change: \(previousGeneration) -> \(newContext.generation) (display \(newContext.displayID))"
@@ -92,6 +96,7 @@ extension MirageHostService {
         guard let desktopStreamID, let desktopContext = desktopStreamContext else { return }
 
         desktopDisplayBounds = displayBounds
+        sharedVirtualDisplayScaleFactor = max(1.0, newContext.scaleFactor)
 
         do {
             if desktopStreamMode == .mirrored {

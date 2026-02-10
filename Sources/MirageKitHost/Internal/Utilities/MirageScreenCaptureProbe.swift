@@ -266,7 +266,10 @@ enum MirageScreenCaptureProbe {
             lastSnapshot = snapshot
             activeCount += 1
 
-            let logicalResolution = SharedVirtualDisplayManager.logicalResolution(for: snapshot.resolution)
+            let logicalResolution = SharedVirtualDisplayManager.logicalResolution(
+                for: snapshot.resolution,
+                scaleFactor: snapshot.scaleFactor
+            )
             let displayBounds = CGVirtualDisplayBridge.getDisplayBounds(
                 snapshot.displayID,
                 knownResolution: logicalResolution

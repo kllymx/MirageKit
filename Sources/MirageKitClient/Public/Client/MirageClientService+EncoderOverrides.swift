@@ -35,6 +35,10 @@ extension MirageClientService {
             MirageLogger
                 .client("Requesting bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
         }
+        if overrides.disableResolutionCap {
+            request.disableResolutionCap = true
+            MirageLogger.client("Requesting uncapped resolution pipeline")
+        }
     }
 
     func applyEncoderOverrides(_ overrides: MirageEncoderOverrides, to request: inout SelectAppMessage) {
@@ -60,6 +64,10 @@ extension MirageClientService {
             MirageLogger
                 .client("Requesting bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
         }
+        if overrides.disableResolutionCap {
+            request.disableResolutionCap = true
+            MirageLogger.client("Requesting uncapped resolution pipeline")
+        }
     }
 
     func applyEncoderOverrides(_ overrides: MirageEncoderOverrides, to request: inout StartDesktopStreamMessage) {
@@ -84,6 +92,10 @@ extension MirageClientService {
             let mbps = Double(bitrate) / 1_000_000.0
             MirageLogger
                 .client("Requesting bitrate: \(mbps.formatted(.number.precision(.fractionLength(1)))) Mbps")
+        }
+        if overrides.disableResolutionCap {
+            request.disableResolutionCap = true
+            MirageLogger.client("Requesting uncapped resolution pipeline")
         }
     }
 }

@@ -36,7 +36,8 @@ public class MirageMetalView: MTKView {
     /// Callback when drawable metrics change - reports pixel size and scale factor
     public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
 
-    /// Optional cap for drawable pixel dimensions (applied in addition to 5K limit).
+    /// Optional cap for drawable pixel dimensions.
+    /// Set a non-positive size to disable drawable capping.
     public var maxDrawableSize: CGSize? {
         didSet {
             guard maxDrawableSize != oldValue else { return }
@@ -145,6 +146,12 @@ public class MirageMetalView: MTKView {
         guard size.width > 0, size.height > 0 else { return size }
         var width = size.width
         var height = size.height
+        if let maxDrawableSize, maxDrawableSize.width <= 0 || maxDrawableSize.height <= 0 {
+            return CGSize(
+                width: alignedEven(width),
+                height: alignedEven(height)
+            )
+        }
         let aspectRatio = width / height
         let maxSize = resolvedMaxDrawableSize()
 

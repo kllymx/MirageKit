@@ -34,6 +34,17 @@ struct DesktopResizeRequestDecisionTests {
         #expect(decision == .send)
     }
 
+    @Test("Capped external display match skips request with non-2x point scale")
+    func cappedExternalDisplayMatchSkipsRequest() {
+        let decision = desktopResizeRequestDecision(
+            targetDisplaySize: CGSize(width: 3008, height: 1692),
+            acknowledgedPixelSize: CGSize(width: 5120, height: 2880),
+            pointScale: 1.702127659574468
+        )
+
+        #expect(decision == .skipNoOp)
+    }
+
     @Test("Missing host size sends request")
     func missingHostSizeSendsRequest() {
         let decision = desktopResizeRequestDecision(

@@ -27,6 +27,7 @@ extension MirageHostService {
         colorSpace: MirageColorSpace?,
         captureQueueDepth: Int?,
         bitrate: Int?,
+        disableResolutionCap: Bool,
         streamScale: CGFloat?,
         audioConfiguration: MirageAudioConfiguration,
         latencyMode: MirageStreamLatencyMode = .smoothest,
@@ -99,6 +100,9 @@ extension MirageHostService {
         // }
 
         let clampedStreamScale = StreamContext.clampStreamScale(streamScale ?? 1.0)
+        if disableResolutionCap {
+            MirageLogger.host("Desktop stream resolution cap disabled")
+        }
 
         if clampedStreamScale < 1.0 {
             MirageLogger.host(
@@ -134,6 +138,7 @@ extension MirageHostService {
         desktopDisplayBounds = bounds
         desktopUsesVirtualDisplay = true
         sharedVirtualDisplayGeneration = await SharedVirtualDisplayManager.shared.getDisplayGeneration()
+        sharedVirtualDisplayScaleFactor = max(1.0, context.scaleFactor)
         logDesktopStartStep("display bounds cached")
 
         if desktopPrimaryPhysicalDisplayID == nil {
@@ -178,6 +183,7 @@ extension MirageHostService {
             streamScale: clampedStreamScale,
             maxPacketSize: networkConfig.maxPacketSize,
             additionalFrameFlags: [.desktopStream],
+            disableResolutionCap: disableResolutionCap,
             latencyMode: latencyMode
         )
         await streamContext.setStartupBaseTime(desktopStartTime, label: "desktop stream \(streamID)")
@@ -309,6 +315,7 @@ extension MirageHostService {
         desktopPrimaryPhysicalDisplayID = nil
         desktopPrimaryPhysicalBounds = nil
         desktopUsesVirtualDisplay = false
+        sharedVirtualDisplayScaleFactor = 2.0
         desktopStreamMode = .mirrored
         streamsByID.removeValue(forKey: streamID)
         streamStartupBaseTimes.removeValue(forKey: streamID)

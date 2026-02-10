@@ -60,7 +60,10 @@ extension StreamContext {
 
         let displayBounds = CGVirtualDisplayBridge.getDisplayBounds(
             vdContext.displayID,
-            knownResolution: SharedVirtualDisplayManager.logicalResolution(for: vdContext.resolution)
+            knownResolution: SharedVirtualDisplayManager.logicalResolution(
+                for: vdContext.resolution,
+                scaleFactor: vdContext.scaleFactor
+            )
         )
         await onVirtualDisplayReady(displayBounds)
 
@@ -91,7 +94,7 @@ extension StreamContext {
                 "Resolved SCWindow \(scWindow.windowID) on virtual display \(resolvedDisplayID)"
             )
 
-        let captureScaleFactor: CGFloat = 2.0
+        let captureScaleFactor = max(1.0, vdContext.scaleFactor)
         let captureTarget = streamTargetDimensions(windowFrame: scWindow.frame, scaleFactor: captureScaleFactor)
         baseCaptureSize = CGSize(width: captureTarget.width, height: captureTarget.height)
         streamScale = resolvedStreamScale(
@@ -202,7 +205,7 @@ extension StreamContext {
             window: resolvedWindowWrapper.window,
             application: resolvedAppWrapper.application,
             display: resolvedDisplayWrapper.display,
-            knownScaleFactor: 2.0,
+            knownScaleFactor: captureScaleFactor,
             outputScale: streamScale,
             onFrame: { [weak self] frame in
                 self?.enqueueCapturedFrame(frame)
@@ -247,7 +250,10 @@ extension StreamContext {
 
         let displayBounds = CGVirtualDisplayBridge.getDisplayBounds(
             newContext.displayID,
-            knownResolution: SharedVirtualDisplayManager.logicalResolution(for: newContext.resolution)
+            knownResolution: SharedVirtualDisplayManager.logicalResolution(
+                for: newContext.resolution,
+                scaleFactor: newContext.scaleFactor
+            )
         )
         try await WindowSpaceManager.shared.moveWindow(
             windowID,
@@ -270,7 +276,7 @@ extension StreamContext {
         let resolvedAppWrapper = resolvedTargets.application
         let resolvedDisplayWrapper = resolvedTargets.display
 
-        let captureScaleFactor: CGFloat = 2.0
+        let captureScaleFactor = max(1.0, newContext.scaleFactor)
         let captureTarget = streamTargetDimensions(windowFrame: scWindow.frame, scaleFactor: captureScaleFactor)
         baseCaptureSize = CGSize(width: captureTarget.width, height: captureTarget.height)
         streamScale = resolvedStreamScale(
@@ -309,7 +315,7 @@ extension StreamContext {
             window: resolvedWindowWrapper.window,
             application: resolvedAppWrapper.application,
             display: resolvedDisplayWrapper.display,
-            knownScaleFactor: 2.0,
+            knownScaleFactor: captureScaleFactor,
             outputScale: streamScale,
             onFrame: { [weak self] frame in
                 self?.enqueueCapturedFrame(frame)

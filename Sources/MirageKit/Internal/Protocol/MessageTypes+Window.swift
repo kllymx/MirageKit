@@ -59,6 +59,8 @@ package struct StartStreamMessage: Codable {
     package var captureQueueDepth: Int?
     /// Client-requested target bitrate (bits per second)
     package var bitrate: Int?
+    /// Client-requested override to bypass host/client resolution caps.
+    package var disableResolutionCap: Bool?
     /// Client-requested stream scale (0.1-1.0)
     /// Applies post-capture downscaling without resizing the host window
     package var streamScale: CGFloat?
@@ -86,6 +88,7 @@ package struct StartStreamMessage: Codable {
         case colorSpace
         case captureQueueDepth
         case bitrate
+        case disableResolutionCap
         case streamScale
         case latencyMode
         case audioConfiguration
@@ -105,6 +108,7 @@ package struct StartStreamMessage: Codable {
         colorSpace: MirageColorSpace? = nil,
         captureQueueDepth: Int? = nil,
         bitrate: Int? = nil,
+        disableResolutionCap: Bool? = nil,
         streamScale: CGFloat? = nil,
         latencyMode: MirageStreamLatencyMode? = nil,
         audioConfiguration: MirageAudioConfiguration? = nil,
@@ -122,6 +126,7 @@ package struct StartStreamMessage: Codable {
         self.colorSpace = colorSpace
         self.captureQueueDepth = captureQueueDepth
         self.bitrate = bitrate
+        self.disableResolutionCap = disableResolutionCap
         self.streamScale = streamScale
         self.latencyMode = latencyMode
         self.audioConfiguration = audioConfiguration

@@ -79,6 +79,10 @@ extension StreamContext {
         streamScale
     }
 
+    func isResolutionCapDisabled() -> Bool {
+        disableResolutionCap
+    }
+
     func getEncoderSettings() -> EncoderSettingsSnapshot {
         EncoderSettingsSnapshot(
             keyFrameInterval: encoderConfig.keyFrameInterval,

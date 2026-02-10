@@ -28,6 +28,7 @@ actor SharedVirtualDisplayManager {
         let displayID: CGDirectDisplayID
         let spaceID: CGSSpaceID
         let resolution: CGSize
+        let scaleFactor: CGFloat
         let refreshRate: Double
         let colorSpace: MirageColorSpace
         let generation: UInt64
@@ -42,6 +43,7 @@ actor SharedVirtualDisplayManager {
         let displayID: CGDirectDisplayID
         let spaceID: CGSSpaceID
         let resolution: CGSize
+        let scaleFactor: CGFloat
         let refreshRate: Double
         let colorSpace: MirageColorSpace
         let generation: UInt64
@@ -118,6 +120,9 @@ actor SharedVirtualDisplayManager {
 
     /// Monotonic display generation incremented when the shared display instance changes.
     var displayGeneration: UInt64 = 0
+
+    /// Consecutive non-Retina fallback streak by color space.
+    var fallbackStreakByColorSpace: [MirageColorSpace: Int] = [:]
 
     /// Handler invoked when the shared display generation changes while streams are active.
     var generationChangeHandler: (@Sendable (DisplaySnapshot, UInt64) -> Void)?

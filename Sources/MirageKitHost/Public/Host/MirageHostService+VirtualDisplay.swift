@@ -15,10 +15,7 @@ import MirageKit
 
 extension MirageHostService {
     private func virtualDisplayScaleFactor(for _: MirageConnectedClient?) -> CGFloat {
-        // HiDPI virtual displays are always 2x logical points.
-        // We intentionally ignore device-native scale to keep the host display
-        // aligned with client view bounds.
-        2.0
+        max(1.0, sharedVirtualDisplayScaleFactor)
     }
 
     func virtualDisplayPixelResolution(
@@ -81,6 +78,7 @@ extension MirageHostService {
         }
 
         let streamScale = await originalContext.getStreamScale()
+        let disableResolutionCap = await originalContext.isResolutionCapDisabled()
         let encoderSettings = await originalContext.getEncoderSettings()
         let targetFrameRate = await originalContext.getTargetFrameRate()
         let audioConfiguration = audioConfigurationByClientID[client.id] ?? .default
@@ -99,6 +97,7 @@ extension MirageHostService {
                 colorSpace: encoderSettings.colorSpace,
                 captureQueueDepth: encoderSettings.captureQueueDepth,
                 bitrate: encoderSettings.bitrate,
+                disableResolutionCap: disableResolutionCap,
                 audioConfiguration: audioConfiguration
             )
             MirageLogger.host("Auto-started stream for new independent window \(window.id)")
@@ -146,6 +145,9 @@ extension MirageHostService {
                 if forceDisplayRefresh {
                     let encoded = await desktopContext.getEncodedDimensions()
                     let pixelResolution = CGSize(width: encoded.width, height: encoded.height)
+                    if let snapshot = await SharedVirtualDisplayManager.shared.getDisplaySnapshot() {
+                        sharedVirtualDisplayScaleFactor = max(1.0, snapshot.scaleFactor)
+                    }
                     let resolution = virtualDisplayLogicalResolution(
                         for: pixelResolution,
                         client: desktopStreamClientContext?.client
@@ -431,6 +433,9 @@ extension MirageHostService {
             // Use SharedVirtualDisplayManager's getDisplayBounds which uses known resolution
             if let newBounds = await SharedVirtualDisplayManager.shared.getDisplayBounds() {
                 sharedVirtualDisplayBounds = newBounds
+                if let snapshot = await SharedVirtualDisplayManager.shared.getDisplaySnapshot() {
+                    sharedVirtualDisplayScaleFactor = max(1.0, snapshot.scaleFactor)
+                }
                 MirageLogger.host("Updated shared virtual display bounds to: \(newBounds)")
 
                 // Also update input cache with new bounds for correct mouse coordinate translation
