@@ -236,6 +236,8 @@ public final class MirageHostService {
         _ client: MirageConnectedClient
     )
         -> Void)?
+    typealias ControlMessageHandler = @MainActor (ControlMessage, MirageConnectedClient, NWConnection) async -> Void
+    var controlMessageHandlers: [ControlMessageType: ControlMessageHandler] = [:]
 
     public enum HostState: Equatable {
         case idle
@@ -287,6 +289,8 @@ public final class MirageHostService {
                 await self?.refreshLightsOutCaptureExclusions()
             }
         }
+
+        registerControlMessageHandlers()
     }
 
     /// Resolve input bounds for desktop streaming based on physical display size.

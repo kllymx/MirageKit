@@ -13,6 +13,10 @@ package let mirageProtocolMagic: UInt32 = 0x4D49_5247 // "MIRG"
 
 /// Protocol version
 package let mirageProtocolVersion: UInt8 = 1
+package let mirageSupportedFeatures: MirageFeatureSet = [
+    .controlMessageRouting,
+    .protocolNegotiation
+]
 
 /// Registration packet magic values.
 package let mirageVideoRegistrationMagic: UInt32 = 0x4D49_5247 // "MIRG"

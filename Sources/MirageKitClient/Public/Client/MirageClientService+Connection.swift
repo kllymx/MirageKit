@@ -38,6 +38,10 @@ extension MirageClientService {
 
     /// Send hello message with device info to host.
     private func sendHelloMessage(connection: NWConnection) async {
+        let negotiation = MirageProtocolNegotiation.clientHello(
+            protocolVersion: Int(MirageKit.protocolVersion),
+            supportedFeatures: mirageSupportedFeatures
+        )
         let hello = HelloMessage(
             deviceID: deviceID,
             deviceName: deviceName,
@@ -50,6 +54,7 @@ extension MirageClientService {
                 maxFrameRate: 120,
                 protocolVersion: Int(MirageKit.protocolVersion)
             ),
+            negotiation: negotiation,
             iCloudUserID: iCloudUserID
         )
 
@@ -273,6 +278,7 @@ extension MirageClientService {
         isAwaitingManualApproval = false
         approvalWaitTask?.cancel()
         hasReceivedHelloResponse = false
+        negotiatedFeatures = []
         desktopStreamID = nil
         desktopStreamResolution = nil
         desktopStreamMode = nil

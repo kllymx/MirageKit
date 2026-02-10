@@ -20,6 +20,14 @@ extension MirageClientService {
             isAwaitingManualApproval = false
             approvalWaitTask?.cancel()
             if response.accepted {
+                if response.negotiation.protocolVersion != Int(MirageKit.protocolVersion) {
+                    connectionState = .error("Protocol version mismatch")
+                    MirageLogger.client(
+                        "Protocol mismatch host=\(response.negotiation.protocolVersion), client=\(MirageKit.protocolVersion)"
+                    )
+                    return
+                }
+                negotiatedFeatures = response.negotiation.selectedFeatures
                 hostDataPort = response.dataPort
                 MirageLogger.client("Received hello response, dataPort: \(hostDataPort)")
             } else {

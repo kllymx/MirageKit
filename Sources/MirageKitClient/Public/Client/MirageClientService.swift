@@ -45,6 +45,8 @@ public final class MirageClientService {
 
     /// Current session state of the connected host (locked, unlocked, etc.)
     public internal(set) var hostSessionState: HostSessionState?
+    /// Selected protocol features from handshake negotiation.
+    var negotiatedFeatures: MirageFeatureSet = []
 
     /// Current session token from the host (for unlock requests)
     var currentSessionToken: String?
@@ -160,6 +162,8 @@ public final class MirageClientService {
     var receiveBuffer = Data()
     var approvalWaitTask: Task<Void, Never>?
     var hasReceivedHelloResponse = false
+    typealias ControlMessageHandler = @MainActor (ControlMessage) async -> Void
+    var controlMessageHandlers: [ControlMessageType: ControlMessageHandler] = [:]
 
     // Video receiving
     var udpConnection: NWConnection?
@@ -408,12 +412,21 @@ public final class MirageClientService {
             MirageLogger.client("Generated new device ID: \(newID)")
         }
         self.sessionStore.clientService = self
+        registerControlMessageHandlers()
     }
 
     #if os(iOS) || os(visionOS)
     /// Cached drawable size from the Metal view.
     public static var lastKnownViewSize: CGSize = .zero
     public static var lastKnownDrawablePixelSize: CGSize = .zero
+    /// Cached active screen bounds in points.
+    public static var lastKnownScreenPointSize: CGSize = .zero
+    /// Cached active screen scale factor.
+    public static var lastKnownScreenScale: CGFloat = 0
+    /// Cached active screen native pixel size.
+    public static var lastKnownScreenNativePixelSize: CGSize = .zero
+    /// Cached active screen native scale factor.
+    public static var lastKnownScreenNativeScale: CGFloat = 0
     /// Cached max refresh rate from the active screen (for external display support).
     public static var lastKnownScreenMaxFPS: Int = 0
     #endif

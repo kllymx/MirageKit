@@ -59,7 +59,11 @@ struct MirageKitTests {
             deviceName: "Test Device",
             deviceType: .mac,
             protocolVersion: Int(MirageKit.protocolVersion),
-            capabilities: MirageHostCapabilities()
+            capabilities: MirageHostCapabilities(),
+            negotiation: MirageProtocolNegotiation.clientHello(
+                protocolVersion: Int(MirageKit.protocolVersion),
+                supportedFeatures: mirageSupportedFeatures
+            )
         )
 
         let message = try ControlMessage(type: .hello, content: hello)
@@ -67,7 +71,7 @@ struct MirageKitTests {
 
         let (deserialized, consumed) = try #require(ControlMessage.deserialize(from: data))
         #expect(consumed == data.count)
-        #expect(deserialized.type == .hello)
+        #expect(deserialized.type == ControlMessageType.hello)
 
         let decodedHello = try deserialized.decode(HelloMessage.self)
         #expect(decodedHello.deviceName == "Test Device")

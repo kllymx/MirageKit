@@ -294,11 +294,35 @@ public class MirageMetalView: MTKView {
         let scaleX = boundsSize.width > 0 ? drawableSize.width / boundsSize.width : 0
         let scaleY = boundsSize.height > 0 ? drawableSize.height / boundsSize.height : 0
         let scale = max(0.1, max(scaleX, scaleY))
+        let screen = resolveCurrentScreen()
+        let nativeScale = screen.nativeScale > 0 ? screen.nativeScale : screen.scale
         return MirageDrawableMetrics(
             pixelSize: drawableSize,
             viewSize: boundsSize,
-            scaleFactor: scale
+            scaleFactor: scale,
+            screenPointSize: screen.bounds.size,
+            screenScale: screen.scale,
+            screenNativePixelSize: orientedNativePixelSize(for: screen),
+            screenNativeScale: nativeScale
         )
+    }
+
+    private func resolveCurrentScreen() -> UIScreen {
+        if let screen = window?.windowScene?.screen { return screen }
+        if let screen = window?.screen { return screen }
+        return UIScreen.main
+    }
+
+    private func orientedNativePixelSize(for screen: UIScreen) -> CGSize {
+        let nativeSize = screen.nativeBounds.size
+        let pointSize = screen.bounds.size
+        guard nativeSize.width > 0, nativeSize.height > 0 else { return .zero }
+
+        let nativeIsLandscape = nativeSize.width >= nativeSize.height
+        let pointsAreLandscape = pointSize.width >= pointSize.height
+        if nativeIsLandscape == pointsAreLandscape { return nativeSize }
+
+        return CGSize(width: nativeSize.height, height: nativeSize.width)
     }
 
     private func cappedDrawableSize(_ size: CGSize) -> CGSize {

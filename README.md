@@ -8,6 +8,7 @@ MirageKit is a window and desktop streaming framework for Apple platforms. It pr
 
 - Window, app, and full desktop streaming from macOS hosts
 - Bonjour discovery with TCP control + UDP video transport
+- Typed hello negotiation (protocol version + feature selection)
 - Peer-to-peer connections over AWDL
 - Encoder configuration helpers and per-stream overrides
 - Input forwarding (mouse, keyboard, scroll, gestures)
@@ -15,9 +16,11 @@ MirageKit is a window and desktop streaming framework for Apple platforms. It pr
 - Session store + streaming content view for UI state
 - Host window + input controllers for macOS integration
 - Virtual display capture for pixel‑perfect rendering
+- Native-screen-based display sizing on iOS/visionOS (`nativeBounds` + `nativeScale`)
 - Remote session state + unlock support
 - Menu bar passthrough and app‑centric streaming utilities
 - Built-in trust store and app preference helpers
+- Registry-based control message dispatch in host/client services
 
 ## Requirements
 
@@ -130,11 +133,14 @@ MirageStreamContentView(
 ## How It Works
 
 - Hosts advertise via Bonjour using `_mirage._tcp` and accept TCP control connections.
+- Hello handshake negotiates protocol compatibility and selected runtime features.
 - Video payloads stream over UDP; clients register stream IDs to receive data.
 - Host encode pipeline: limited in-flight frames with always-latest frame selection.
 - The host can create a shared virtual display sized to the client’s display for 1:1 pixels.
+- iOS/visionOS display sizing derives from native screen metrics, while live desktop resize follows drawable bounds.
 - Session state updates allow remote unlock flows (login screen vs locked session).
 - Menu bar passthrough enables clients to render native menu structures and send actions back.
+- Control message routing uses per-message-type handler registries in both host and client services.
 
 ## Architecture
 

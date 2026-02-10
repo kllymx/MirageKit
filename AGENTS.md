@@ -6,6 +6,7 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 ## Behavior Notes
 - MirageKit license: PolyForm Shield 1.0.0 with the line-of-business notice for dedicated remote window/desktop/secondary display/drawing-tablet streaming.
 - Stream scale: client-provided scale derived from the app's resolution limit; encoder overrides define bitrate targets.
+- Hello handshake includes typed protocol negotiation with feature selection (`MirageProtocolNegotiation`, `MirageFeatureSet`).
 - ProMotion preference: refresh override based on MTKView cadence, 120 when supported and enabled, otherwise 60.
 - Backpressure: queue-based frame drops.
 - Encoder quality: derived from target bitrate and output resolution; QP bounds mapping when supported.
@@ -32,6 +33,8 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - Capture recovery distinguishes fallback-resume keyframe requests from capture-restart requests; fallback resume queues an urgent keyframe without epoch reset, and capture restart uses reset+epoch escalation only after repeated restart streaks.
 - Capture restart pacing uses exponential cooldown for repeated restarts (base 3 seconds, 2x multiplier, 18-second cap) and resets the streak after a 20-second stable window.
 - iOS drawable size changes are reported immediately once they exceed the resize tolerance (0.5% or 4px).
+- iOS/visionOS virtual-display sizing derives from native screen metrics (`nativeBounds`, `nativeScale`) while drawable-size callbacks continue to drive live desktop resize transactions.
+- Host/client control-message dispatch uses handler registries keyed by `ControlMessageType`.
 
 ## Interaction Guidelines
 - Planning phase: detailed step list; explicit plan.
@@ -110,6 +113,7 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 - `MirageHostService` and `MirageClientService` are the main entry points.
 - Delegate pattern for event callbacks.
 - Services are `@Observable` and `@MainActor`.
+- Control-message routing in host/client services uses registry maps keyed by message type.
 
 ## Streaming Pipeline
 - Host: ApplicationScanner → WindowCaptureEngine → MetalFrameDiffer → HEVCEncoder → Network.

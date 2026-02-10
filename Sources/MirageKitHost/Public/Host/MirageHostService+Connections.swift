@@ -14,6 +14,11 @@ import MirageKit
 #if os(macOS)
 @MainActor
 extension MirageHostService {
+    private struct ReceivedHello {
+        let deviceInfo: MirageDeviceInfo
+        let negotiation: MirageProtocolNegotiation
+    }
+
     private enum ApprovalOutcome {
         case accepted
         case rejected
@@ -93,11 +98,12 @@ extension MirageHostService {
 
         MirageLogger.host("Waiting for hello message from \(endpointDescription)...")
 
-        guard let deviceInfo = await receiveHelloMessage(from: connection, endpoint: endpointDescription) else {
+        guard let hello = await receiveHelloMessage(from: connection, endpoint: endpointDescription) else {
             MirageLogger.host("Closing connection without valid hello from \(endpointDescription)")
             connection.cancel()
             return
         }
+        let deviceInfo = hello.deviceInfo
 
         let connectionID = ObjectIdentifier(connection)
 
@@ -109,13 +115,14 @@ extension MirageHostService {
             } else {
                 MirageLogger.host("Rejecting \(deviceInfo.name); host already has a pending client")
             }
-            sendHelloResponse(
-                accepted: false,
-                to: connection,
-                dataPort: currentDataPort(),
-                cancelAfterSend: true
-            )
-            return
+        sendHelloResponse(
+            accepted: false,
+            to: connection,
+            dataPort: currentDataPort(),
+            negotiation: hello.negotiation,
+            cancelAfterSend: true
+        )
+        return
         }
 
         defer {
@@ -147,6 +154,7 @@ extension MirageHostService {
             accepted: true,
             to: connection,
             dataPort: currentDataPort(),
+            negotiation: hello.negotiation,
             cancelAfterSend: false
         )
 
@@ -182,7 +190,7 @@ extension MirageHostService {
     }
 
     /// Receive hello message from a connecting client.
-    func receiveHelloMessage(from connection: NWConnection, endpoint: String) async -> MirageDeviceInfo? {
+    private func receiveHelloMessage(from connection: NWConnection, endpoint: String) async -> ReceivedHello? {
         let result: (
             Data?,
             NWConnection.ContentContext?,
@@ -218,13 +226,27 @@ extension MirageHostService {
 
         do {
             let hello = try message.decode(HelloMessage.self)
+            guard hello.negotiation.protocolVersion == Int(MirageKit.protocolVersion) else {
+                MirageLogger.host(
+                    "Rejected hello from \(hello.deviceName): protocol \(hello.negotiation.protocolVersion) unsupported"
+                )
+                return nil
+            }
+            let selectedFeatures = hello.negotiation.supportedFeatures.intersection(mirageSupportedFeatures)
             MirageLogger.host("Received hello from \(hello.deviceName) (\(hello.deviceType.displayName))")
-            return MirageDeviceInfo(
-                id: hello.deviceID,
-                name: hello.deviceName,
-                deviceType: hello.deviceType,
-                endpoint: endpoint,
-                iCloudUserID: hello.iCloudUserID
+            return ReceivedHello(
+                deviceInfo: MirageDeviceInfo(
+                    id: hello.deviceID,
+                    name: hello.deviceName,
+                    deviceType: hello.deviceType,
+                    endpoint: endpoint,
+                    iCloudUserID: hello.iCloudUserID
+                ),
+                negotiation: MirageProtocolNegotiation(
+                    protocolVersion: Int(MirageKit.protocolVersion),
+                    supportedFeatures: mirageSupportedFeatures,
+                    selectedFeatures: selectedFeatures
+                )
             )
         } catch {
             MirageLogger.error(.host, "Failed to decode hello: \(error)")
@@ -359,6 +381,7 @@ extension MirageHostService {
         accepted: Bool,
         to connection: NWConnection,
         dataPort: UInt16,
+        negotiation: MirageProtocolNegotiation,
         cancelAfterSend: Bool
     ) {
         do {
@@ -368,7 +391,8 @@ extension MirageHostService {
                 hostID: hostID,
                 hostName: hostName,
                 requiresAuth: false,
-                dataPort: dataPort
+                dataPort: dataPort,
+                negotiation: negotiation
             )
             let message = try ControlMessage(type: .helloResponse, content: response)
             let data = message.serialize()

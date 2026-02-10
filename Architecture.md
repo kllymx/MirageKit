@@ -41,7 +41,9 @@ flowchart LR
 - **Encoding**: `HEVCEncoder` provides low-latency hardware encoding, per-frame quality control, and keyframe handling.
 - **Packetization**: `StreamPacketSender` fragments encoded frames with `FrameHeader` and paces large keyframes.
 - **Protocol**: `MirageProtocol` defines header sizes, packet validation, and CRC checks.
+- **Handshake Negotiation**: `MirageProtocolNegotiation` and `MirageFeatureSet` negotiate protocol compatibility and selected features during hello exchange.
 - **Network**: `BonjourAdvertiser`, `BonjourBrowser`, `ConnectionManager`, and `HybridTransport` manage TCP/UDP and discovery.
+- **Display Metrics**: iOS/visionOS clients derive virtual-display sizing from native screen metrics (`nativeBounds`, `nativeScale`) and keep drawable metrics for live resize decisions.
 - **Decoding**: `FrameReassembler` rebuilds frames, `HEVCDecoder` handles decoding, and errors trigger keyframe recovery.
 - **Rendering**: `MetalRenderer` converts CVPixelBuffer to textures with content-rect cropping.
 - **Virtual Display**: `SharedVirtualDisplayManager` manages a single shared virtual display for streams.
@@ -54,8 +56,8 @@ flowchart LR
 sequenceDiagram
     participant Client
     participant Host
-    Client->>Host: TCP hello + capabilities
-    Host-->>Client: helloResponse + dataPort
+    Client->>Host: TCP hello + capabilities + negotiation
+    Host-->>Client: helloResponse + dataPort + selected features
     Client->>Host: startStream / startDesktopStream
     Host-->>Client: streamStarted / desktopStreamStarted + dimensionToken
     Client->>Host: UDP registration (streamID + deviceID)
@@ -76,6 +78,7 @@ sequenceDiagram
 
 - Creates or reuses a shared virtual display.
 - Mirrors physical displays into a single virtual surface at the client resolution (capped at 5K).
+- Full-screen iOS/visionOS sizing anchors to native screen metrics, while in-session drawable changes still drive resize transactions.
 - Uses `.desktopStream` frame flags for client-side context.
 
 ### App-Centric Streaming
@@ -108,6 +111,8 @@ flowchart LR
 ## Transport and Protocol
 
 - **TCP control**: `ControlMessage` envelopes typed JSON payloads (window lists, input events, session state, app streaming, menu bar).
+- **Handshake negotiation**: hello/helloResponse includes `MirageProtocolNegotiation` with selected features from `MirageFeatureSet`.
+- **Message routing**: host and client services dispatch control messages through registry maps keyed by `ControlMessageType`.
 - **UDP video**: `FrameHeader` carries sequencing, checksum, content rect, and dimension tokens.
 - **Peer-to-peer**: `enablePeerToPeer` configures AWDL for discovery and transport.
 - **Fragmentation**: large encoded frames are split into multiple UDP packets; keyframes are sent in bounded bursts.

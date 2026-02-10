@@ -40,6 +40,67 @@ extension MirageClientService {
         return max(0.1, min(1.0, scale))
     }
 
+    func virtualDisplayPixelResolution(for displayResolution: CGSize) -> CGSize {
+        let alignedResolution = scaledDisplayResolution(displayResolution)
+        guard alignedResolution.width > 0, alignedResolution.height > 0 else { return .zero }
+
+        #if os(macOS)
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let pixelSize = CGSize(
+            width: alignedResolution.width * scale,
+            height: alignedResolution.height * scale
+        )
+        return scaledDisplayResolution(pixelSize)
+        #elseif os(iOS) || os(visionOS)
+        let metrics = resolvedScreenMetrics()
+        let nativePoints = scaledDisplayResolution(metrics.nativePointSize)
+        let nativePixels = scaledDisplayResolution(metrics.nativePixelSize)
+        if nativePoints.width > 0,
+           nativePoints.height > 0,
+           nativePixels.width > 0,
+           nativePixels.height > 0 {
+            let widthScale = nativePixels.width / nativePoints.width
+            let heightScale = nativePixels.height / nativePoints.height
+            let pixelSize = CGSize(
+                width: alignedResolution.width * widthScale,
+                height: alignedResolution.height * heightScale
+            )
+            return scaledDisplayResolution(pixelSize)
+        }
+
+        if metrics.nativeScale > 0 {
+            let pixelSize = CGSize(
+                width: alignedResolution.width * metrics.nativeScale,
+                height: alignedResolution.height * metrics.nativeScale
+            )
+            return scaledDisplayResolution(pixelSize)
+        }
+        return alignedResolution
+        #else
+        return alignedResolution
+        #endif
+    }
+
+    func preferredDesktopDisplayResolution(for viewSize: CGSize) -> CGSize {
+        let alignedViewSize = scaledDisplayResolution(viewSize)
+        guard alignedViewSize.width > 0, alignedViewSize.height > 0 else { return .zero }
+
+        #if os(iOS) || os(visionOS)
+        let metrics = resolvedScreenMetrics()
+        let screenPoints = scaledDisplayResolution(metrics.pointSize)
+        let nativePoints = scaledDisplayResolution(metrics.nativePointSize)
+        if screenPoints.width > 0,
+           screenPoints.height > 0,
+           nativePoints.width > 0,
+           nativePoints.height > 0,
+           approximatelyEqualSizes(alignedViewSize, screenPoints) {
+            return nativePoints
+        }
+        #endif
+
+        return alignedViewSize
+    }
+
     public func getMainDisplayResolution() -> CGSize {
         #if os(macOS)
         guard let mainScreen = NSScreen.main else { return CGSize(width: 2560, height: 1600) }
@@ -48,12 +109,13 @@ extension MirageClientService {
             width: mainScreen.frame.width * scale,
             height: mainScreen.frame.height * scale
         )
-        #elseif os(iOS)
-        if Self.lastKnownViewSize.width > 0, Self.lastKnownViewSize.height > 0 { return Self.lastKnownViewSize }
-        return .zero
-        #elseif os(visionOS)
-        // Use cached drawable size if available, otherwise default resolution
-        if Self.lastKnownViewSize.width > 0, Self.lastKnownViewSize.height > 0 { return Self.lastKnownViewSize }
+        #elseif os(iOS) || os(visionOS)
+        let metrics = resolvedScreenMetrics()
+        let nativePoints = scaledDisplayResolution(metrics.nativePointSize)
+        if nativePoints.width > 0, nativePoints.height > 0 { return nativePoints }
+        if Self.lastKnownViewSize.width > 0, Self.lastKnownViewSize.height > 0 {
+            return scaledDisplayResolution(Self.lastKnownViewSize)
+        }
         return .zero
         #else
         return CGSize(width: 2560, height: 1600)
@@ -62,14 +124,8 @@ extension MirageClientService {
 
     public func getVirtualDisplayPixelResolution() -> CGSize {
         #if os(iOS) || os(visionOS)
-        let viewSize = getMainDisplayResolution()
-        guard viewSize.width > 0, viewSize.height > 0 else { return .zero }
-        let scaleFactor: CGFloat = 2.0
-        let pixelSize = CGSize(
-            width: viewSize.width * scaleFactor,
-            height: viewSize.height * scaleFactor
-        )
-        return scaledDisplayResolution(pixelSize)
+        let displayResolution = getMainDisplayResolution()
+        return virtualDisplayPixelResolution(for: displayResolution)
         #else
         return getMainDisplayResolution()
         #endif
@@ -205,4 +261,81 @@ extension MirageClientService {
         guard rate > 0 else { return 60 }
         return rate >= 120 ? 120 : 60
     }
+
+    #if os(iOS) || os(visionOS)
+    private struct ScreenMetrics {
+        let pointSize: CGSize
+        let scale: CGFloat
+        let nativePixelSize: CGSize
+        let nativeScale: CGFloat
+
+        var nativePointSize: CGSize {
+            guard nativeScale > 0, nativePixelSize.width > 0, nativePixelSize.height > 0 else { return .zero }
+            return CGSize(
+                width: nativePixelSize.width / nativeScale,
+                height: nativePixelSize.height / nativeScale
+            )
+        }
+    }
+
+    private func resolvedScreenMetrics() -> ScreenMetrics {
+        if let cached = cachedScreenMetrics() { return cached }
+        return liveScreenMetrics()
+    }
+
+    private func cachedScreenMetrics() -> ScreenMetrics? {
+        let pointSize = Self.lastKnownScreenPointSize
+        let scale = Self.lastKnownScreenScale
+        let nativePixelSize = Self.lastKnownScreenNativePixelSize
+        let nativeScale = Self.lastKnownScreenNativeScale
+
+        guard pointSize.width > 0,
+              pointSize.height > 0,
+              nativePixelSize.width > 0,
+              nativePixelSize.height > 0,
+              nativeScale > 0 else {
+            return nil
+        }
+
+        return ScreenMetrics(
+            pointSize: pointSize,
+            scale: max(1.0, scale),
+            nativePixelSize: nativePixelSize,
+            nativeScale: max(1.0, nativeScale)
+        )
+    }
+
+    private func liveScreenMetrics() -> ScreenMetrics {
+        let screen = UIScreen.main
+        let pointSize = screen.bounds.size
+        let nativePixelSize = orientedNativePixelSize(
+            nativeSize: screen.nativeBounds.size,
+            pointSize: pointSize
+        )
+        let scale = max(1.0, screen.scale)
+        let nativeScale = max(1.0, screen.nativeScale)
+
+        return ScreenMetrics(
+            pointSize: pointSize,
+            scale: scale,
+            nativePixelSize: nativePixelSize,
+            nativeScale: nativeScale
+        )
+    }
+
+    private func orientedNativePixelSize(nativeSize: CGSize, pointSize: CGSize) -> CGSize {
+        guard nativeSize.width > 0, nativeSize.height > 0 else { return .zero }
+        let nativeIsLandscape = nativeSize.width >= nativeSize.height
+        let pointsAreLandscape = pointSize.width >= pointSize.height
+        if nativeIsLandscape == pointsAreLandscape { return nativeSize }
+        return CGSize(width: nativeSize.height, height: nativeSize.width)
+    }
+
+    private func approximatelyEqualSizes(_ lhs: CGSize, _ rhs: CGSize) -> Bool {
+        let widthTolerance = max(8, rhs.width * 0.02)
+        let heightTolerance = max(8, rhs.height * 0.02)
+        return abs(lhs.width - rhs.width) <= widthTolerance &&
+            abs(lhs.height - rhs.height) <= heightTolerance
+    }
+    #endif
 }

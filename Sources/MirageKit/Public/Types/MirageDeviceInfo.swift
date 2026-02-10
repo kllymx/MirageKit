@@ -23,7 +23,6 @@ public struct MirageDeviceInfo: Identifiable, Sendable {
 
     /// iCloud user record ID for trust evaluation, if available.
     public let iCloudUserID: String?
-
     public init(
         id: UUID = UUID(),
         name: String,

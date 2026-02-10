@@ -81,7 +81,7 @@ extension MirageClientService {
             MirageLogger.client("Received message type: \(message.type)")
 
             Task {
-                await handleControlMessage(message)
+                await routeControlMessage(message)
             }
         }
     }

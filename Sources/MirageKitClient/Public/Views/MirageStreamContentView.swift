@@ -308,7 +308,23 @@ public struct MirageStreamContentView: View {
         if resolvedRawPixelSize.width > 0, resolvedRawPixelSize.height > 0 {
             MirageClientService.lastKnownDrawablePixelSize = resolvedRawPixelSize
         }
-        let fallbackScreenSize = viewSize
+        if let screenPointSize = metrics.screenPointSize,
+           screenPointSize.width > 0,
+           screenPointSize.height > 0 {
+            MirageClientService.lastKnownScreenPointSize = screenPointSize
+        }
+        if let screenScale = metrics.screenScale, screenScale > 0 {
+            MirageClientService.lastKnownScreenScale = screenScale
+        }
+        if let nativePixelSize = metrics.screenNativePixelSize,
+           nativePixelSize.width > 0,
+           nativePixelSize.height > 0 {
+            MirageClientService.lastKnownScreenNativePixelSize = nativePixelSize
+        }
+        if let nativeScale = metrics.screenNativeScale, nativeScale > 0 {
+            MirageClientService.lastKnownScreenNativeScale = nativeScale
+        }
+        let fallbackScreenSize = metrics.screenPointSize ?? viewSize
         #else
         let screenBounds = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let fallbackScreenSize = screenBounds.size
@@ -346,11 +362,15 @@ public struct MirageStreamContentView: View {
                 )
             }
 
-            scheduleStreamScaleUpdate(for: viewSize)
+            let desktopDisplaySize = isDesktopStream
+                ? clientService.preferredDesktopDisplayResolution(for: viewSize)
+                : .zero
+            let streamScaleReferenceSize = isDesktopStream ? desktopDisplaySize : viewSize
+            scheduleStreamScaleUpdate(for: streamScaleReferenceSize)
 
             guard isDesktopStream else { return }
 
-            let preferredDisplaySize = clientService.scaledDisplayResolution(viewSize)
+            let preferredDisplaySize = desktopDisplaySize
             guard preferredDisplaySize.width > 0, preferredDisplaySize.height > 0 else { return }
             latestDrawableDisplaySize = preferredDisplaySize
 
@@ -481,23 +501,19 @@ public struct MirageStreamContentView: View {
         return .zero
     }
 
-    private func resolvedDesktopStreamScale(for viewSize: CGSize) -> CGFloat {
+    private func resolvedDesktopStreamScale(for displaySize: CGSize) -> CGFloat {
         guard let maxDrawableSize,
               maxDrawableSize.width > 0,
               maxDrawableSize.height > 0,
-              viewSize.width > 0,
-              viewSize.height > 0 else {
+              displaySize.width > 0,
+              displaySize.height > 0 else {
             return 1.0
         }
 
-        let basePoints = clientService.scaledDisplayResolution(viewSize)
+        let basePoints = clientService.scaledDisplayResolution(displaySize)
         guard basePoints.width > 0, basePoints.height > 0 else { return 1.0 }
 
-        let virtualDisplayScaleFactor: CGFloat = 2.0
-        let basePixels = CGSize(
-            width: basePoints.width * virtualDisplayScaleFactor,
-            height: basePoints.height * virtualDisplayScaleFactor
-        )
+        let basePixels = clientService.virtualDisplayPixelResolution(for: basePoints)
         guard basePixels.width > 0, basePixels.height > 0 else { return 1.0 }
 
         let widthScale = maxDrawableSize.width / basePixels.width
@@ -506,29 +522,28 @@ public struct MirageStreamContentView: View {
     }
 
     private func desktopPointScale(for displaySize: CGSize) -> CGFloat {
-        let virtualDisplayScaleFactor: CGFloat = 2.0
+        let basePixels = clientService.virtualDisplayPixelResolution(for: displaySize)
+        let widthScale = displaySize.width > 0 ? basePixels.width / displaySize.width : 1.0
+        let heightScale = displaySize.height > 0 ? basePixels.height / displaySize.height : 1.0
+        let virtualDisplayScaleFactor = max(1.0, widthScale, heightScale)
         let streamScale = resolvedDesktopStreamScale(for: displaySize)
         return max(1.0, virtualDisplayScaleFactor * streamScale)
     }
 
-    private func scheduleStreamScaleUpdate(for viewSize: CGSize) {
+    private func scheduleStreamScaleUpdate(for displaySize: CGSize) {
         guard let maxDrawableSize,
               maxDrawableSize.width > 0,
               maxDrawableSize.height > 0,
-              viewSize.width > 0,
-              viewSize.height > 0 else {
+              displaySize.width > 0,
+              displaySize.height > 0 else {
             return
         }
 
-        let basePoints = clientService.scaledDisplayResolution(viewSize)
+        let basePoints = clientService.scaledDisplayResolution(displaySize)
         guard basePoints.width > 0, basePoints.height > 0 else { return }
 
-        let virtualDisplayScaleFactor: CGFloat = 2.0
-        let basePixels = CGSize(
-            width: basePoints.width * virtualDisplayScaleFactor,
-            height: basePoints.height * virtualDisplayScaleFactor
-        )
-        let clampedScale = resolvedDesktopStreamScale(for: viewSize)
+        let basePixels = clientService.virtualDisplayPixelResolution(for: basePoints)
+        let clampedScale = resolvedDesktopStreamScale(for: displaySize)
 
         let rawTargetSize = CGSize(
             width: basePixels.width * clampedScale,
