@@ -152,14 +152,18 @@ extension MirageHostService {
         }
 
         MirageLogger.host("Connection approved, sending hello response...")
-        sendHelloResponse(
+        guard sendHelloResponse(
             accepted: true,
             to: connection,
             dataPort: currentDataPort(),
             negotiation: hello.negotiation,
             requestNonce: hello.requestNonce,
             cancelAfterSend: false
-        )
+        ) else {
+            MirageLogger.error(.host, "Failed to send accepted hello response to \(deviceInfo.name)")
+            connection.cancel()
+            return
+        }
 
         let client = MirageConnectedClient(
             id: deviceInfo.id,
@@ -432,6 +436,7 @@ extension MirageHostService {
         if singleClientConnectionID == connectionID { singleClientConnectionID = nil }
     }
 
+    @discardableResult
     private func sendHelloResponse(
         accepted: Bool,
         to connection: NWConnection,
@@ -439,13 +444,14 @@ extension MirageHostService {
         negotiation: MirageProtocolNegotiation,
         requestNonce: String,
         cancelAfterSend: Bool
-    ) {
+    )
+    -> Bool {
         do {
             let hostName = Host.current().localizedName ?? "Mac"
             guard let identityManager else {
                 MirageLogger.error(.host, "Cannot send hello response without identity manager")
                 connection.cancel()
-                return
+                return false
             }
             let identity = try identityManager.currentIdentity()
             let timestampMs = MirageIdentitySigning.currentTimestampMs()
@@ -484,7 +490,10 @@ extension MirageHostService {
             let data = message.serialize()
 
             connection.send(content: data, completion: .contentProcessed { error in
-                if let error { MirageLogger.error(.host, "Failed to send hello response: \(error)") } else if accepted {
+                if let error {
+                    MirageLogger.error(.host, "Failed to send hello response: \(error)")
+                    if accepted { connection.cancel() }
+                } else if accepted {
                     MirageLogger.host("Sent hello response with dataPort \(dataPort)")
                 } else {
                     MirageLogger.host("Sent rejection hello response")
@@ -492,9 +501,11 @@ extension MirageHostService {
 
                 if cancelAfterSend { connection.cancel() }
             })
+            return true
         } catch {
             MirageLogger.error(.host, "Failed to create hello response: \(error)")
             if cancelAfterSend { connection.cancel() }
+            return false
         }
     }
 }

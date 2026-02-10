@@ -61,7 +61,7 @@ extension MirageClientService {
     }
 
     /// Send hello message with device info to host.
-    private func sendHelloMessage(connection: NWConnection) async {
+    private func sendHelloMessage(connection: NWConnection) async throws {
         let negotiation = MirageProtocolNegotiation.clientHello(
             protocolVersion: Int(MirageKit.protocolVersion),
             supportedFeatures: mirageSupportedFeatures
@@ -114,13 +114,21 @@ extension MirageClientService {
             let data = message.serialize()
             MirageLogger.client("Sending hello: \(deviceName) (\(currentDeviceType.displayName))")
 
-            connection.send(content: data, completion: .contentProcessed { error in
-                if let error { MirageLogger.error(.client, "Failed to send hello: \(error)") } else {
-                    MirageLogger.client("Hello sent successfully")
-                }
-            })
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let continuationBox = ContinuationBox<Void>(continuation)
+                connection.send(content: data, completion: .contentProcessed { error in
+                    if let error {
+                        continuationBox.resume(throwing: error)
+                    } else {
+                        continuationBox.resume()
+                    }
+                })
+            }
+
+            MirageLogger.client("Hello sent successfully")
         } catch {
-            MirageLogger.error(.client, "Failed to create hello message: \(error)")
+            MirageLogger.error(.client, "Failed to send hello message: \(error)")
+            throw error
         }
     }
 
@@ -142,10 +150,13 @@ extension MirageClientService {
         approvalWaitTask?.cancel()
         connectedHost = host
 
+        var pendingConnection: NWConnection?
+
         do {
             // Create a direct control connection to the endpoint.
             let parameters = controlParameters(for: controlTransport)
             let connection = NWConnection(to: host.endpoint, using: parameters)
+            pendingConnection = connection
 
             // Wait for connection to be ready.
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -201,18 +212,19 @@ extension MirageClientService {
             }
 
             // Send hello message with device info.
-            await sendHelloMessage(connection: connection)
+            try await sendHelloMessage(connection: connection)
             startManualApprovalWaitTimer()
 
             // Start receiving messages from the server.
             startReceiving()
         } catch {
+            pendingConnection?.cancel()
             MirageLogger.error(.client, "Connection failed: \(error)")
-            connectionState = .disconnected
-            connectedHost = nil
-            transport = nil
-            isAwaitingManualApproval = false
-            approvalWaitTask?.cancel()
+            await handleDisconnect(
+                reason: error.localizedDescription,
+                state: .disconnected,
+                notifyDelegate: false
+            )
             throw error
         }
     }

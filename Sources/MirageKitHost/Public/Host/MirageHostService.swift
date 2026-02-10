@@ -51,7 +51,12 @@ public final class MirageHostService {
     public weak var trustProvider: (any MirageTrustProvider)?
 
     /// Identity manager for signed handshake envelopes.
-    public var identityManager: MirageIdentityManager? = MirageIdentityManager.shared
+    public var identityManager: MirageIdentityManager? = MirageIdentityManager.shared {
+        didSet {
+            let keyID = Self.identityKeyID(for: identityManager)
+            updateAdvertisedIdentityKeyID(keyID)
+        }
+    }
 
     /// Accessibility permission manager for input injection.
     public let permissionManager = MirageAccessibilityPermissionManager()
@@ -290,7 +295,7 @@ public final class MirageHostService {
         networkConfiguration: MirageNetworkConfiguration = .default
     ) {
         let name = hostName ?? Host.current().localizedName ?? "Mac"
-        let identityKeyID = try? MirageIdentityManager.shared.currentIdentity().keyID
+        let identityKeyID = Self.identityKeyID(for: MirageIdentityManager.shared)
         let capabilities = MirageHostCapabilities(
             maxStreams: 4,
             supportsHEVC: true,
@@ -328,6 +333,11 @@ public final class MirageHostService {
         lightsOutController.onEmergencyShortcut = onLightsOutEmergencyShortcut
 
         registerControlMessageHandlers()
+    }
+
+    private static func identityKeyID(for manager: MirageIdentityManager?) -> String? {
+        guard let manager else { return nil }
+        return try? manager.currentIdentity().keyID
     }
 
     /// Updates the identity key advertised in Bonjour TXT capabilities.

@@ -53,6 +53,9 @@ AGENTS.md is the live reference for MirageKit. Include entries for new files, di
 ## Project Structure
 ```
 MirageKit/
+├─ .github/
+│  └─ workflows/
+│     └─ ci.yml
 ├─ Package.swift
 ├─ Sources/
 │  ├─ MirageKit/ (shared)
@@ -172,6 +175,7 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 ## Build and Test
 - Build: `swift build --package-path MirageKit`.
 - Test: `swift test --package-path MirageKit`.
+- CI: `.github/workflows/ci.yml` runs `swift build` and `swift test` on `macos-26` with `DEVELOPER_DIR=/Applications/Xcode_26.2.app/Contents/Developer`.
 
 ## Coding Style and Naming
 - Use 4 spaces for indentation and keep line wrapping consistent with surrounding code.
