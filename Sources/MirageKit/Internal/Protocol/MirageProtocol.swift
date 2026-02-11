@@ -16,7 +16,9 @@ package let mirageProtocolVersion: UInt8 = 1
 package let mirageSupportedFeatures: MirageFeatureSet = [
     .controlMessageRouting,
     .protocolNegotiation,
-    .identityAuthV2
+    .identityAuthV2,
+    .udpRegistrationAuthV1,
+    .encryptedMediaV1
 ]
 
 /// Registration packet magic values.
@@ -44,12 +46,16 @@ package let mirageHeaderSize: Int = 61
 /// Base fields (4+1+1+1+1+2+4+8+4+2+2+2+4+4+1+2+4 = 47).
 package let mirageAudioHeaderSize: Int = 47
 
+/// AEAD authentication tag size (ChaCha20-Poly1305).
+package let mirageMediaAuthTagSize: Int = 16
+
 /// Compute payload size from the configured maximum packet size.
 /// `maxPacketSize` includes the Mirage header; this returns the payload size only.
 package func miragePayloadSize(maxPacketSize: Int) -> Int {
-    let payload = maxPacketSize - mirageHeaderSize
+    // Reserve room for AEAD tag so encrypted payloads stay within max packet size.
+    let payload = maxPacketSize - mirageHeaderSize - mirageMediaAuthTagSize
     if payload > 0 { return payload }
-    return mirageDefaultMaxPacketSize - mirageHeaderSize
+    return mirageDefaultMaxPacketSize - mirageHeaderSize - mirageMediaAuthTagSize
 }
 
 /// Audio frame packet header (47 bytes, fixed size).
@@ -229,6 +235,8 @@ package struct AudioPacketFlags: OptionSet, Sendable {
 
     /// Stream discontinuity (decoder should reset buffer state).
     package static let discontinuity = AudioPacketFlags(rawValue: 1 << 0)
+    /// Payload is encrypted with session media key.
+    package static let encryptedPayload = AudioPacketFlags(rawValue: 1 << 1)
 }
 
 /// Video frame packet header (61 bytes, fixed size)
@@ -510,6 +518,8 @@ package struct FrameFlags: OptionSet, Sendable {
 
     /// FEC parity fragment (not part of the encoded frame payload)
     package static let fecParity = FrameFlags(rawValue: 1 << 10)
+    /// Payload is encrypted with session media key.
+    package static let encryptedPayload = FrameFlags(rawValue: 1 << 11)
 }
 
 /// CRC32 calculation for packet validation

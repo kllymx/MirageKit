@@ -40,10 +40,16 @@ extension MirageHostService {
             await pipeline.updateConfiguration(configuration)
             await pipeline.updateSourceStreamID(sourceStreamID)
         } else {
+            guard let mediaSecurityContext = mediaSecurityByClientID[clientID] else {
+                MirageLogger.error(.host, "Cannot activate audio pipeline without media security context for client \(clientID)")
+                await stopAudioPipeline(for: clientID, reason: .disabled)
+                return
+            }
             let pipeline = HostAudioPipeline(
                 sourceStreamID: sourceStreamID,
                 audioConfiguration: configuration,
-                maxPayloadSize: payloadSize
+                maxPayloadSize: payloadSize,
+                mediaSecurityContext: mediaSecurityContext
             ) { [weak self] packets, encoded, currentStreamID in
                 guard let self else { return }
                 Task { @MainActor [weak self] in

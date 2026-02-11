@@ -82,10 +82,24 @@ extension MirageHostService {
 
             let magic = data.prefix(4)
             if magic.elementsEqual([0x4D, 0x49, 0x52, 0x51]) {
+                let minimumLength = 20 + MirageMediaSecurity.registrationTokenLength
+                guard data.count >= minimumLength else {
+                    MirageLogger.host("Invalid quality-test registration packet length \(data.count)")
+                    continue
+                }
                 let uuidBytes: uuid_t = data.withUnsafeBytes { ptr in
                     ptr.loadUnaligned(fromByteOffset: 4, as: uuid_t.self)
                 }
                 let deviceID = UUID(uuid: uuidBytes)
+                guard validateRegistrationToken(
+                    data: data,
+                    tokenOffset: 20,
+                    clientID: deviceID,
+                    channel: "quality-test",
+                    streamID: nil
+                ) else {
+                    continue
+                }
                 qualityTestConnectionsByClientID[deviceID] = connection
                 let pathText = connection.currentPath.map(describeNetworkPath) ?? "unknown"
                 MirageLogger.host("Registered quality test UDP connection for device \(deviceID.uuidString) (\(pathText))")
@@ -93,7 +107,8 @@ extension MirageHostService {
             }
 
             if magic.elementsEqual([0x4D, 0x49, 0x52, 0x41]) {
-                guard data.count >= 22 else {
+                let minimumLength = 22 + MirageMediaSecurity.registrationTokenLength
+                guard data.count >= minimumLength else {
                     MirageLogger.host("Invalid audio registration packet")
                     continue
                 }
@@ -104,6 +119,15 @@ extension MirageHostService {
                     ptr.loadUnaligned(fromByteOffset: 6, as: uuid_t.self)
                 }
                 let deviceID = UUID(uuid: uuidBytes)
+                guard validateRegistrationToken(
+                    data: data,
+                    tokenOffset: 22,
+                    clientID: deviceID,
+                    channel: "audio",
+                    streamID: streamID
+                ) else {
+                    continue
+                }
                 audioConnectionsByClientID[deviceID] = connection
                 let pathText = connection.currentPath.map(describeNetworkPath) ?? "unknown"
                 MirageLogger.host(
@@ -117,13 +141,31 @@ extension MirageHostService {
                 MirageLogger.host("Invalid video registration magic")
                 continue
             }
+            let minimumLength = 22 + MirageMediaSecurity.registrationTokenLength
+            guard data.count >= minimumLength else {
+                MirageLogger.host("Invalid video registration packet length \(data.count)")
+                continue
+            }
 
             let streamID = data.dropFirst(4).prefix(2).withUnsafeBytes { ptr in
                 ptr.loadUnaligned(fromByteOffset: 0, as: StreamID.self).littleEndian
             }
+            let uuidBytes: uuid_t = data.withUnsafeBytes { ptr in
+                ptr.loadUnaligned(fromByteOffset: 6, as: uuid_t.self)
+            }
+            let deviceID = UUID(uuid: uuidBytes)
+            guard validateRegistrationToken(
+                data: data,
+                tokenOffset: 22,
+                clientID: deviceID,
+                channel: "video",
+                streamID: streamID
+            ) else {
+                continue
+            }
 
             let pathText = connection.currentPath.map(describeNetworkPath) ?? "unknown"
-            MirageLogger.host("Received video registration for stream \(streamID) (\(pathText))")
+            MirageLogger.host("Received video registration for stream \(streamID) client \(deviceID) (\(pathText))")
 
             guard streamsByID[streamID] != nil else {
                 MirageLogger.host("Stream \(streamID) not found, may be pending")
@@ -169,6 +211,38 @@ extension MirageHostService {
         } else {
             connection.send(content: data, completion: .idempotent)
         }
+    }
+
+    private func validateRegistrationToken(
+        data: Data,
+        tokenOffset: Int,
+        clientID: UUID,
+        channel: String,
+        streamID: StreamID?
+    ) -> Bool {
+        let tokenLength = MirageMediaSecurity.registrationTokenLength
+        let streamText = streamID.map { "\($0)" } ?? "-"
+        guard data.count >= tokenOffset + tokenLength else {
+            MirageLogger.host(
+                "Rejected \(channel) registration missing token (client \(clientID), stream \(streamText))"
+            )
+            return false
+        }
+        let token = Data(data[tokenOffset ..< tokenOffset + tokenLength])
+        guard let context = mediaSecurityByClientID[clientID] else {
+            MirageLogger.host(
+                "Rejected \(channel) registration without media context (client \(clientID), stream \(streamText))"
+            )
+            return false
+        }
+        if !MirageMediaSecurity.constantTimeEqual(token, context.udpRegistrationToken) {
+            MirageLogger.error(
+                .host,
+                "Rejected \(channel) registration with invalid token (client \(clientID), stream \(streamText))"
+            )
+            return false
+        }
+        return true
     }
 }
 

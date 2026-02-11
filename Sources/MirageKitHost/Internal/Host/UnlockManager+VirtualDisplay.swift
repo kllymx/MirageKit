@@ -35,7 +35,7 @@ extension UnlockManager {
             if !loginWindowReady {
                 MirageLogger.error(
                     .host,
-                    "Proceeding with unlock despite loginwindow not being detected - HID events may be queued"
+                    "Login window not detected while preparing virtual display; HID credential entry stays blocked until lock UI is visible"
                 )
             }
         } catch {

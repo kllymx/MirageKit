@@ -421,12 +421,26 @@ extension StreamContext {
         let encodeOverBudget = averageEncodeMs > frameBudgetMs * 1.05
         let queuePressured = queueBytes > queuePressureBytes
         let highPressure = queueBytes > maxQueuedBytes
+        let bitrateConstrained = (encoderConfig.bitrate ?? 0) > 0
 
         if encodeOverBudget || queuePressured {
             qualityUnderBudgetCount = 0
             qualityOverBudgetCount += 1
-            let step = highPressure ? qualityDropStepHighPressure : qualityDropStep
-            if qualityOverBudgetCount >= qualityDropThreshold {
+            let dropThreshold: Int = if bitrateConstrained && highPressure {
+                1
+            } else if bitrateConstrained && queuePressured {
+                max(1, qualityDropThreshold - 1)
+            } else {
+                qualityDropThreshold
+            }
+            let step: Float = if highPressure {
+                bitrateConstrained ? (qualityDropStepHighPressure + 0.03) : qualityDropStepHighPressure
+            } else if bitrateConstrained && queuePressured {
+                qualityDropStep + 0.01
+            } else {
+                qualityDropStep
+            }
+            if qualityOverBudgetCount >= dropThreshold {
                 let next = max(qualityFloor, activeQuality - step)
                 if next < activeQuality {
                     activeQuality = next

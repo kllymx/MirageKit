@@ -110,14 +110,10 @@ actor SessionStateMonitor {
             }.joined(separator: ", ")
             MirageLogger.log(.host, "Console sessions: [\(summary)]")
 
-            let loginWindowUsers = consoleUsers.filter {
-                let name = $0.userName?.lowercased() ?? ""
-                return name == "loginwindow" || name == "loginwindow.app" || name == "login window"
-            }
+            let loginWindowUsers = consoleUsers.filter { isLoginWindowUserName($0.userName) }
             let loggedInUsers = consoleUsers.filter {
                 guard let name = $0.userName, !name.isEmpty else { return false }
-                let lower = name.lowercased()
-                return lower != "loginwindow" && lower != "loginwindow.app" && lower != "login window"
+                return !isLoginWindowUserName(name)
             }
 
             let hasLoggedInUser = !loggedInUsers.isEmpty
@@ -152,7 +148,7 @@ actor SessionStateMonitor {
         guard let sessionDict = CGSessionCopyCurrentDictionary() as? [String: Any] else {
             // No session dictionary - could be headless Mac or early boot
             // Try alternative detection: check if console user exists
-            if let consoleUser = getConsoleUser(), !consoleUser.isEmpty, consoleUser != "loginwindow" {
+            if let consoleUser = getConsoleUser(), !consoleUser.isEmpty, !isLoginWindowUserName(consoleUser) {
                 let locked = isScreenLocked()
                 if locked {
                     MirageLogger.log(
@@ -241,6 +237,12 @@ actor SessionStateMonitor {
         let locked: Bool?
     }
 
+    private func isLoginWindowUserName(_ name: String?) -> Bool {
+        guard let name else { return false }
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "loginwindow" || normalized == "loginwindow.app" || normalized == "login window"
+    }
+
     private func getConsoleUserSessions() -> [ConsoleUserSession]? {
         let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IOService:/IOResources/IOConsoleUsers")
         guard entry != MACH_PORT_NULL else { return nil }
@@ -301,34 +303,24 @@ actor SessionStateMonitor {
         return NSUserName()
     }
 
-    /// Check if screen is locked via alternative method (screensaver/lock process)
+    /// Check if screen is locked via conservative lock indicators.
+    /// This intentionally avoids treating display sleep/off as lock.
     private func isScreenLocked() -> Bool {
         // Fast path: look for loginwindow/screen saver shielding windows
         if isLoginWindowVisible() { return true }
 
-        // Check via ioreg for screen lock state
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/ioreg")
-        task.arguments = ["-r", "-c", "IODisplayWrangler", "-d", "1"]
-
-        let pipe = Pipe()
-        task.standardOutput = pipe
-
-        do {
-            try task.run()
-            task.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8) {
-                // If DeviceDesiresPower is 0, display is off/locked
-                if output.contains("\"DevicePowerState\" = 0") { return true }
-            }
-        } catch {
-            // Ignore errors
+        if let consoleUsers = getConsoleUserSessions(), !consoleUsers.isEmpty {
+            if consoleUsers.contains(where: { $0.locked == true }) { return true }
+            if consoleUsers.contains(where: { isLoginWindowUserName($0.userName) }) { return true }
         }
 
-        // Method 3: Check via defaults for screensaver state
-        // defaults read com.apple.screensaver 2>/dev/null returns values if screensaver is active
+        if let sessionDict = CGSessionCopyCurrentDictionary() as? [String: Any] {
+            let lockedFlag = sessionDict["CGSSessionScreenIsLocked"] as? Bool
+                ?? sessionDict["kCGSSessionScreenIsLocked"] as? Bool
+                ?? sessionDict["kCGSessionScreenIsLocked"] as? Bool
+                ?? false
+            if lockedFlag { return true }
+        }
 
         return false
     }

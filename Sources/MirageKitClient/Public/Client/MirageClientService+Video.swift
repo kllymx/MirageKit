@@ -139,12 +139,6 @@ extension MirageClientService {
                                 return
                             }
 
-                            if streamID == service.qualityProbeTransportStreamIDForFiltering {
-                                let payload = data.dropFirst(mirageHeaderSize)
-                                let payloadBytes = min(Int(header.payloadLength), payload.count)
-                                service.recordQualityProbeTransportBytes(payloadBytes)
-                            }
-
                             if service.takeStartupPacketPending(streamID) {
                                 Task { @MainActor in
                                     service.logStartupFirstPacketIfNeeded(streamID: streamID)
@@ -157,15 +151,60 @@ extension MirageClientService {
                                 return
                             }
 
-                            let payload = data.dropFirst(mirageHeaderSize)
-                            if payload.count != Int(header.payloadLength) {
+                            let wirePayload = Data(data.dropFirst(mirageHeaderSize))
+                            let expectedWireLength = header.flags.contains(.encryptedPayload)
+                                ? Int(header.payloadLength) + MirageMediaSecurity.authTagLength
+                                : Int(header.payloadLength)
+                            if wirePayload.count != expectedWireLength {
                                 MirageLogger
                                     .client(
-                                        "UDP payload length mismatch for stream \(streamID): header=\(header.payloadLength), actual=\(payload.count)"
+                                        "UDP payload length mismatch for stream \(streamID): expected=\(expectedWireLength), plain=\(header.payloadLength), actual=\(wirePayload.count), encrypted=\(header.flags.contains(.encryptedPayload))"
                                     )
                                 receiveNext()
                                 return
                             }
+                            let payload: Data
+                            if header.flags.contains(.encryptedPayload) {
+                                guard let mediaSecurityContext = service.mediaSecurityContextForNetworking else {
+                                    MirageLogger.error(
+                                        .client,
+                                        "Dropping encrypted video packet without media security context (stream \(streamID))"
+                                    )
+                                    receiveNext()
+                                    return
+                                }
+                                do {
+                                    payload = try MirageMediaSecurity.decryptVideoPayload(
+                                        wirePayload,
+                                        header: header,
+                                        context: mediaSecurityContext,
+                                        direction: .hostToClient
+                                    )
+                                } catch {
+                                    MirageLogger.error(
+                                        .client,
+                                        "Failed to decrypt video packet stream \(streamID) frame \(header.frameNumber) seq \(header.sequenceNumber): \(error)"
+                                    )
+                                    receiveNext()
+                                    return
+                                }
+                                if payload.count != Int(header.payloadLength) {
+                                    MirageLogger.error(
+                                        .client,
+                                        "Decrypted video payload length mismatch for stream \(streamID): expected \(header.payloadLength), actual \(payload.count)"
+                                    )
+                                    receiveNext()
+                                    return
+                                }
+                            } else {
+                                payload = wirePayload
+                            }
+
+                            if streamID == service.qualityProbeTransportStreamIDForFiltering {
+                                let payloadBytes = min(Int(header.payloadLength), payload.count)
+                                service.recordQualityProbeTransportBytes(payloadBytes)
+                            }
+
                             reassembler.processPacket(payload, header: header)
                         }
                     }
@@ -185,13 +224,19 @@ extension MirageClientService {
     /// Send stream registration to host via UDP.
     func sendStreamRegistration(streamID: StreamID) async throws {
         guard let udpConn = udpConnection else { throw MirageError.protocolError("No UDP connection") }
+        guard let mediaSecurityContext else {
+            throw MirageError.protocolError("Missing media security context")
+        }
 
         var data = Data()
         data.append(contentsOf: [0x4D, 0x49, 0x52, 0x47])
         withUnsafeBytes(of: streamID.littleEndian) { data.append(contentsOf: $0) }
         withUnsafeBytes(of: deviceID.uuid) { data.append(contentsOf: $0) }
+        data.append(mediaSecurityContext.udpRegistrationToken)
 
-        MirageLogger.client("Sending stream registration for stream \(streamID)")
+        MirageLogger.client(
+            "Sending stream registration for stream \(streamID) (tokenBytes=\(mediaSecurityContext.udpRegistrationToken.count))"
+        )
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             udpConn.send(content: data, completion: .contentProcessed { error in

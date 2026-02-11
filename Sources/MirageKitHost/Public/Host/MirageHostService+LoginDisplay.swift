@@ -74,15 +74,22 @@ extension MirageHostService {
         loginDisplayRetryTask = nil
         loginDisplayStartGeneration &+= 1
         let generation = loginDisplayStartGeneration
+        if let connectedClient = connectedClients.first,
+           mediaSecurityByClientID[connectedClient.id] == nil {
+            MirageLogger.error(.host, "Cannot start login display without media security context for client \(connectedClient.name)")
+            return
+        }
 
         let streamID = nextStreamID
         nextStreamID += 1
+        let loginClientID = connectedClients.first?.id
 
         let context = StreamContext(
             streamID: streamID,
             windowID: 0,
             encoderConfig: encoderConfig,
             maxPacketSize: networkConfig.maxPacketSize,
+            mediaSecurityContext: loginClientID.flatMap { mediaSecurityByClientID[$0] },
             additionalFrameFlags: [.loginDisplay],
             latencyMode: .smoothest
         )

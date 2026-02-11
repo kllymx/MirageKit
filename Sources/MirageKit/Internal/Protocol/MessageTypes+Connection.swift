@@ -75,6 +75,10 @@ package struct HelloResponseMessage: Codable {
     package let negotiation: MirageProtocolNegotiation
     /// Echoed client hello nonce for request/response binding.
     package let requestNonce: String
+    /// Whether media payload encryption is required for this session.
+    package let mediaEncryptionEnabled: Bool
+    /// Auth token required for UDP registration packets.
+    package let udpRegistrationToken: Data
     /// Signed host identity envelope.
     package let identity: MirageIdentityEnvelope
 
@@ -86,6 +90,8 @@ package struct HelloResponseMessage: Codable {
         dataPort: UInt16,
         negotiation: MirageProtocolNegotiation,
         requestNonce: String,
+        mediaEncryptionEnabled: Bool,
+        udpRegistrationToken: Data,
         identity: MirageIdentityEnvelope
     ) {
         self.accepted = accepted
@@ -95,6 +101,8 @@ package struct HelloResponseMessage: Codable {
         self.dataPort = dataPort
         self.negotiation = negotiation
         self.requestNonce = requestNonce
+        self.mediaEncryptionEnabled = mediaEncryptionEnabled
+        self.udpRegistrationToken = udpRegistrationToken
         self.identity = identity
     }
 }

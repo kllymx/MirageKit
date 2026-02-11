@@ -18,6 +18,7 @@ extension MirageHostService {
         let deviceInfo: MirageDeviceInfo
         let negotiation: MirageProtocolNegotiation
         let requestNonce: String
+        let identity: MirageIdentityEnvelope
     }
 
     private enum ApprovalOutcome {
@@ -121,6 +122,7 @@ extension MirageHostService {
                 to: connection,
                 dataPort: currentDataPort(),
                 negotiation: hello.negotiation,
+                deviceInfo: hello.deviceInfo,
                 requestNonce: hello.requestNonce,
                 cancelAfterSend: true
             )
@@ -152,14 +154,16 @@ extension MirageHostService {
         }
 
         MirageLogger.host("Connection approved, sending hello response...")
-        guard sendHelloResponse(
+        let responseResult = sendHelloResponse(
             accepted: true,
             to: connection,
             dataPort: currentDataPort(),
             negotiation: hello.negotiation,
+            deviceInfo: hello.deviceInfo,
             requestNonce: hello.requestNonce,
             cancelAfterSend: false
-        ) else {
+        )
+        guard responseResult.sent else {
             MirageLogger.error(.host, "Failed to send accepted hello response to \(deviceInfo.name)")
             connection.cancel()
             return
@@ -178,6 +182,17 @@ extension MirageHostService {
             tcpConnection: connection,
             udpConnection: nil
         )
+        if let mediaSecurity = responseResult.mediaSecurity {
+            mediaSecurityByClientID[client.id] = mediaSecurity
+            MirageLogger.host(
+                "Media security established for \(client.name) " +
+                    "(tokenBytes=\(mediaSecurity.udpRegistrationToken.count), keyBytes=\(mediaSecurity.sessionKey.count))"
+            )
+        } else {
+            MirageLogger.error(.host, "Missing media security context for accepted client \(client.name)")
+            connection.cancel()
+            return
+        }
         clientsByConnection[ObjectIdentifier(connection)] = clientContext
         clientsByID[client.id] = clientContext
         audioConfigurationByClientID[client.id] = .default
@@ -250,6 +265,14 @@ extension MirageHostService {
                 MirageLogger.host("Rejected hello from \(hello.deviceName): missing identityAuthV2 support")
                 return nil
             }
+            guard hello.negotiation.supportedFeatures.contains(.udpRegistrationAuthV1) else {
+                MirageLogger.host("Rejected hello from \(hello.deviceName): missing udpRegistrationAuthV1 support")
+                return nil
+            }
+            guard hello.negotiation.supportedFeatures.contains(.encryptedMediaV1) else {
+                MirageLogger.host("Rejected hello from \(hello.deviceName): missing encryptedMediaV1 support")
+                return nil
+            }
             let identity = hello.identity
             guard identity.keyID == MirageIdentityManager.keyID(for: identity.publicKey) else {
                 MirageLogger.host("Rejected hello from \(hello.deviceName): invalid identity key ID")
@@ -302,7 +325,8 @@ extension MirageHostService {
                     supportedFeatures: mirageSupportedFeatures,
                     selectedFeatures: selectedFeatures
                 ),
-                requestNonce: identity.nonce
+                requestNonce: identity.nonce,
+                identity: identity
             )
         } catch {
             MirageLogger.error(.host, "Failed to decode hello: \(error)")
@@ -442,20 +466,49 @@ extension MirageHostService {
         to connection: NWConnection,
         dataPort: UInt16,
         negotiation: MirageProtocolNegotiation,
+        deviceInfo: MirageDeviceInfo,
         requestNonce: String,
         cancelAfterSend: Bool
     )
-    -> Bool {
+    -> (sent: Bool, mediaSecurity: MirageMediaSecurityContext?) {
         do {
             let hostName = Host.current().localizedName ?? "Mac"
             guard let identityManager else {
                 MirageLogger.error(.host, "Cannot send hello response without identity manager")
                 connection.cancel()
-                return false
+                return (false, nil)
             }
             let identity = try identityManager.currentIdentity()
             let timestampMs = MirageIdentitySigning.currentTimestampMs()
             let nonce = UUID().uuidString.lowercased()
+            let mediaEncryptionEnabled = accepted
+            let udpRegistrationToken = accepted ? MirageMediaSecurity.makeRegistrationToken() : Data()
+            let mediaSecurityContext: MirageMediaSecurityContext?
+            if accepted {
+                guard let clientPublicKey = deviceInfo.identityPublicKey,
+                      let clientKeyID = deviceInfo.identityKeyID else {
+                    MirageLogger.error(.host, "Cannot derive media key without client identity metadata")
+                    return (false, nil)
+                }
+                do {
+                    mediaSecurityContext = try MirageMediaSecurity.deriveContext(
+                        identityManager: identityManager,
+                        peerPublicKey: clientPublicKey,
+                        hostID: hostID,
+                        clientID: deviceInfo.id,
+                        hostKeyID: identity.keyID,
+                        clientKeyID: clientKeyID,
+                        hostNonce: nonce,
+                        clientNonce: requestNonce,
+                        udpRegistrationToken: udpRegistrationToken
+                    )
+                } catch {
+                    MirageLogger.error(.host, "Failed to derive media security context: \(error)")
+                    return (false, nil)
+                }
+            } else {
+                mediaSecurityContext = nil
+            }
             let payload = try MirageIdentitySigning.helloResponsePayload(
                 accepted: accepted,
                 hostID: hostID,
@@ -464,6 +517,8 @@ extension MirageHostService {
                 dataPort: dataPort,
                 negotiation: negotiation,
                 requestNonce: requestNonce,
+                mediaEncryptionEnabled: mediaEncryptionEnabled,
+                udpRegistrationToken: udpRegistrationToken,
                 keyID: identity.keyID,
                 publicKey: identity.publicKey,
                 timestampMs: timestampMs,
@@ -478,6 +533,8 @@ extension MirageHostService {
                 dataPort: dataPort,
                 negotiation: negotiation,
                 requestNonce: requestNonce,
+                mediaEncryptionEnabled: mediaEncryptionEnabled,
+                udpRegistrationToken: udpRegistrationToken,
                 identity: MirageIdentityEnvelope(
                     keyID: identity.keyID,
                     publicKey: identity.publicKey,
@@ -494,18 +551,20 @@ extension MirageHostService {
                     MirageLogger.error(.host, "Failed to send hello response: \(error)")
                     if accepted { connection.cancel() }
                 } else if accepted {
-                    MirageLogger.host("Sent hello response with dataPort \(dataPort)")
+                    MirageLogger.host(
+                        "Sent hello response with dataPort \(dataPort), mediaEncryption=\(mediaEncryptionEnabled)"
+                    )
                 } else {
                     MirageLogger.host("Sent rejection hello response")
                 }
 
                 if cancelAfterSend { connection.cancel() }
             })
-            return true
+            return (true, mediaSecurityContext)
         } catch {
             MirageLogger.error(.host, "Failed to create hello response: \(error)")
             if cancelAfterSend { connection.cancel() }
-            return false
+            return (false, nil)
         }
     }
 }

@@ -32,7 +32,11 @@ extension StreamContext {
         let display = displayWrapper.display
 
         onEncodedPacket = onEncodedFrame
-        let packetSender = StreamPacketSender(maxPayloadSize: maxPayloadSize, onEncodedFrame: onEncodedFrame)
+        let packetSender = StreamPacketSender(
+            maxPayloadSize: maxPayloadSize,
+            mediaSecurityContext: mediaSecurityContext,
+            onEncodedFrame: onEncodedFrame
+        )
         self.packetSender = packetSender
         await packetSender.start()
         await packetSender.setTargetBitrateBps(encoderConfig.bitrate)
@@ -173,7 +177,11 @@ extension StreamContext {
         let display = displayWrapper.display
 
         onEncodedPacket = onEncodedFrame
-        let packetSender = StreamPacketSender(maxPayloadSize: maxPayloadSize, onEncodedFrame: onEncodedFrame)
+        let packetSender = StreamPacketSender(
+            maxPayloadSize: maxPayloadSize,
+            mediaSecurityContext: mediaSecurityContext,
+            onEncodedFrame: onEncodedFrame
+        )
         self.packetSender = packetSender
         await packetSender.start()
         await packetSender.setTargetBitrateBps(encoderConfig.bitrate)
@@ -313,7 +321,11 @@ extension StreamContext {
         let display = displayWrapper.display
 
         onEncodedPacket = onEncodedFrame
-        let packetSender = StreamPacketSender(maxPayloadSize: maxPayloadSize, onEncodedFrame: onEncodedFrame)
+        let packetSender = StreamPacketSender(
+            maxPayloadSize: maxPayloadSize,
+            mediaSecurityContext: mediaSecurityContext,
+            onEncodedFrame: onEncodedFrame
+        )
         self.packetSender = packetSender
         await packetSender.start()
         await packetSender.setTargetBitrateBps(encoderConfig.bitrate)

@@ -37,6 +37,9 @@ extension MirageHostService {
         }
 
         guard remoteTransportEnabled, isHosting else {
+            MirageLogger.host(
+                "Remote listener disabled (remoteTransportEnabled=\(remoteTransportEnabled), isHosting=\(isHosting))"
+            )
             stopRemoteControlListener()
             return
         }
@@ -58,6 +61,7 @@ extension MirageHostService {
     async -> MirageRemoteCandidate? {
         guard remoteTransportEnabled,
               let localPort = remoteControlPort else {
+            MirageLogger.host("Remote candidate skipped (transport disabled or listener port unavailable)")
             return nil
         }
 
@@ -66,6 +70,9 @@ extension MirageHostService {
             port: stunPort,
             localPort: localPort,
             timeout: timeout
+        )
+        MirageLogger.host(
+            "Remote STUN probe result reachable=\(result.reachable) mapped=\(result.mappedAddress ?? "none"):\(result.mappedPort ?? 0)"
         )
         guard result.reachable,
               let mappedAddress = result.mappedAddress,

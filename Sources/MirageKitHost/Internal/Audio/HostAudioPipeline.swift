@@ -26,12 +26,16 @@ actor HostAudioPipeline {
         sourceStreamID: StreamID,
         audioConfiguration: MirageAudioConfiguration,
         maxPayloadSize: Int,
+        mediaSecurityContext: MirageMediaSecurityContext?,
         maxQueuedBuffers: Int = 48,
         onPacketsReady: @escaping @Sendable ([Data], EncodedAudioFrame, StreamID) -> Void
     ) {
         self.sourceStreamID = sourceStreamID
         encoder = AudioEncoder(audioConfiguration: audioConfiguration)
-        packetizer = AudioPacketizer(maxPayloadSize: maxPayloadSize)
+        packetizer = AudioPacketizer(
+            maxPayloadSize: maxPayloadSize,
+            mediaSecurityContext: mediaSecurityContext
+        )
         self.maxQueuedBuffers = max(4, maxQueuedBuffers)
         self.onPacketsReady = onPacketsReady
     }

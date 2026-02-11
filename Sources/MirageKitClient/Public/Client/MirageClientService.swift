@@ -183,6 +183,9 @@ public final class MirageClientService {
     var approvalWaitTask: Task<Void, Never>?
     var hasReceivedHelloResponse = false
     var pendingHelloNonce: String?
+    var mediaSecurityContext: MirageMediaSecurityContext?
+    let mediaSecurityContextLock = NSLock()
+    nonisolated(unsafe) var mediaSecurityContextStorage: MirageMediaSecurityContext?
     typealias ControlMessageHandler = @MainActor (ControlMessage) async -> Void
     var controlMessageHandlers: [ControlMessageType: ControlMessageHandler] = [:]
 
@@ -285,6 +288,19 @@ public final class MirageClientService {
         startupPacketPendingLock.lock()
         startupPacketPendingStorage.remove(streamID)
         startupPacketPendingLock.unlock()
+    }
+
+    nonisolated var mediaSecurityContextForNetworking: MirageMediaSecurityContext? {
+        mediaSecurityContextLock.lock()
+        defer { mediaSecurityContextLock.unlock() }
+        return mediaSecurityContextStorage
+    }
+
+    func setMediaSecurityContext(_ context: MirageMediaSecurityContext?) {
+        mediaSecurityContext = context
+        mediaSecurityContextLock.lock()
+        mediaSecurityContextStorage = context
+        mediaSecurityContextLock.unlock()
     }
 
     func startStartupRegistrationRetry(streamID: StreamID) {

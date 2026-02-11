@@ -21,6 +21,7 @@ extension MirageClientService {
                 MirageLogger.client("Rejected hello response without pending nonce")
                 return
             }
+            let helloNonce = pendingHelloNonce
             guard response.requestNonce == pendingHelloNonce else {
                 connectionState = .error("Invalid handshake nonce")
                 MirageLogger.client("Rejected hello response with mismatched nonce")
@@ -50,6 +51,8 @@ extension MirageClientService {
                 dataPort: response.dataPort,
                 negotiation: response.negotiation,
                 requestNonce: response.requestNonce,
+                mediaEncryptionEnabled: response.mediaEncryptionEnabled,
+                udpRegistrationToken: response.udpRegistrationToken,
                 keyID: identity.keyID,
                 publicKey: identity.publicKey,
                 timestampMs: identity.timestampMs,
@@ -72,6 +75,50 @@ extension MirageClientService {
                 return
             }
 
+            guard response.mediaEncryptionEnabled else {
+                connectionState = .error("Host media encryption disabled")
+                MirageLogger.client("Rejected hello response with media encryption disabled")
+                return
+            }
+            guard response.udpRegistrationToken.count == MirageMediaSecurity.registrationTokenLength else {
+                connectionState = .error("Invalid UDP registration token")
+                MirageLogger.client(
+                    "Rejected hello response due to invalid UDP registration token length \(response.udpRegistrationToken.count)"
+                )
+                return
+            }
+            let resolvedIdentityManager = identityManager ?? MirageIdentityManager.shared
+            let localIdentity: MirageAccountIdentity
+            do {
+                localIdentity = try resolvedIdentityManager.currentIdentity()
+            } catch {
+                connectionState = .error("Missing local identity")
+                MirageLogger.client("Failed to load local identity for media key derivation: \(error)")
+                return
+            }
+            let mediaContext: MirageMediaSecurityContext
+            do {
+                mediaContext = try MirageMediaSecurity.deriveContext(
+                    identityManager: resolvedIdentityManager,
+                    peerPublicKey: identity.publicKey,
+                    hostID: response.hostID,
+                    clientID: deviceID,
+                    hostKeyID: identity.keyID,
+                    clientKeyID: localIdentity.keyID,
+                    hostNonce: identity.nonce,
+                    clientNonce: helloNonce,
+                    udpRegistrationToken: response.udpRegistrationToken
+                )
+            } catch {
+                connectionState = .error("Media key derivation failed")
+                MirageLogger.client("Rejected hello response due to media key derivation failure: \(error)")
+                return
+            }
+
+            setMediaSecurityContext(mediaContext)
+            MirageLogger.client(
+                "Media security established (tokenBytes=\(mediaContext.udpRegistrationToken.count), keyBytes=\(mediaContext.sessionKey.count))"
+            )
             connectedHostIdentityKeyID = identity.keyID
             self.pendingHelloNonce = nil
             hasReceivedHelloResponse = true
@@ -87,6 +134,18 @@ extension MirageClientService {
                     connectionState = .error("Protocol version mismatch")
                     MirageLogger.client(
                         "Protocol mismatch host=\(response.negotiation.protocolVersion), client=\(MirageKit.protocolVersion)"
+                    )
+                    return
+                }
+                let requiredFeatures: MirageFeatureSet = [
+                    .identityAuthV2,
+                    .udpRegistrationAuthV1,
+                    .encryptedMediaV1,
+                ]
+                guard response.negotiation.selectedFeatures.contains(requiredFeatures) else {
+                    connectionState = .error("Protocol features mismatch")
+                    MirageLogger.client(
+                        "Rejected hello response missing required features \(response.negotiation.selectedFeatures)"
                     )
                     return
                 }

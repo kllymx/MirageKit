@@ -38,7 +38,11 @@ extension StreamContext {
         onEncodedPacket = onEncodedFrame
         self.onContentBoundsChanged = onContentBoundsChanged
         self.onNewWindowDetected = onNewWindowDetected
-        let packetSender = StreamPacketSender(maxPayloadSize: maxPayloadSize, onEncodedFrame: onEncodedFrame)
+        let packetSender = StreamPacketSender(
+            maxPayloadSize: maxPayloadSize,
+            mediaSecurityContext: mediaSecurityContext,
+            onEncodedFrame: onEncodedFrame
+        )
         self.packetSender = packetSender
         await packetSender.start()
         await packetSender.setTargetBitrateBps(encoderConfig.bitrate)

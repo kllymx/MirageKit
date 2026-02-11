@@ -14,11 +14,16 @@ import MirageKit
 
 actor AudioPacketizer {
     private let maxPayloadSize: Int
+    private let mediaSecurityContext: MirageMediaSecurityContext?
     private var frameNumber: UInt32 = 0
     private var sequenceNumber: UInt32 = 0
 
-    init(maxPayloadSize: Int) {
+    init(
+        maxPayloadSize: Int,
+        mediaSecurityContext: MirageMediaSecurityContext? = nil
+    ) {
         self.maxPayloadSize = max(1, maxPayloadSize)
+        self.mediaSecurityContext = mediaSecurityContext
     }
 
     func resetCounters() {
@@ -49,6 +54,7 @@ actor AudioPacketizer {
             let checksum = CRC32.calculate(payload)
             var flags: AudioPacketFlags = []
             if discontinuity, fragmentIndex == 0 { flags.insert(.discontinuity) }
+            if mediaSecurityContext != nil { flags.insert(.encryptedPayload) }
 
             let header = AudioPacketHeader(
                 codec: frame.codec,
@@ -68,8 +74,28 @@ actor AudioPacketizer {
             )
             sequenceNumber &+= 1
 
+            let wirePayload: Data
+            if let mediaSecurityContext {
+                do {
+                    wirePayload = try MirageMediaSecurity.encryptAudioPayload(
+                        payload,
+                        header: header,
+                        context: mediaSecurityContext,
+                        direction: .hostToClient
+                    )
+                } catch {
+                    MirageLogger.error(
+                        .host,
+                        "Failed to encrypt audio packet stream \(streamID) frame \(currentFrameNumber) seq \(header.sequenceNumber): \(error)"
+                    )
+                    continue
+                }
+            } else {
+                wirePayload = payload
+            }
+
             var packet = header.serialize()
-            packet.append(payload)
+            packet.append(wirePayload)
             packets.append(packet)
         }
 

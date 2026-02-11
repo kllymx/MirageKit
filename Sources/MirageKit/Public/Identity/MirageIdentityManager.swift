@@ -78,6 +78,33 @@ public final class MirageIdentityManager {
         return signature.derRepresentation
     }
 
+    /// Derives shared key bytes with a peer P-256 public key.
+    ///
+    /// Uses ECDH followed by HKDF-SHA256 expansion.
+    /// - Parameters:
+    ///   - peerPublicKey: Raw P-256 public key bytes from the peer.
+    ///   - salt: HKDF salt bytes.
+    ///   - sharedInfo: HKDF context bytes.
+    ///   - outputByteCount: Derived key size in bytes.
+    public func deriveSharedKey(
+        with peerPublicKey: Data,
+        salt: Data,
+        sharedInfo: Data,
+        outputByteCount: Int = 32
+    ) throws -> Data {
+        let signingKey = try loadOrCreatePrivateKey()
+        let agreementKey = try P256.KeyAgreement.PrivateKey(rawRepresentation: signingKey.rawRepresentation)
+        let peerKey = try P256.KeyAgreement.PublicKey(rawRepresentation: peerPublicKey)
+        let sharedSecret = try agreementKey.sharedSecretFromKeyAgreement(with: peerKey)
+        let derivedKey = sharedSecret.hkdfDerivedSymmetricKey(
+            using: SHA256.self,
+            salt: salt,
+            sharedInfo: sharedInfo,
+            outputByteCount: outputByteCount
+        )
+        return derivedKey.withUnsafeBytes { Data($0) }
+    }
+
     /// Rotates the account signing key and returns the new identity.
     public func rotateIdentity() throws -> MirageAccountIdentity {
         try deletePrivateKey()

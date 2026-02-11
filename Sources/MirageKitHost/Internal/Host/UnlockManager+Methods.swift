@@ -33,6 +33,12 @@ extension UnlockManager {
 
     /// Try to unlock via HID-level keyboard simulation (with verified password)
     func tryHIDUnlock(username: String?, password: String, requiresUsername: Bool) async -> Bool {
+        let stateBeforeInput = await sessionMonitor.refreshState(notify: false)
+        guard stateBeforeInput.requiresUnlock else {
+            MirageLogger.host("Skipping HID unlock because session no longer requires unlock")
+            return false
+        }
+
         await focusLoginField()
 
         if requiresUsername, let username {

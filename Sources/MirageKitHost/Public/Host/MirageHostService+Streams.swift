@@ -77,6 +77,9 @@ public extension MirageHostService {
             captureQueueDepth: captureQueueDepth,
             bitrate: bitrate
         )
+        guard mediaSecurityByClientID[client.id] != nil else {
+            throw MirageError.protocolError("Missing media security context for client")
+        }
 
         // TODO: HDR support - requires proper virtual display EDR configuration
         // Apply HDR color space if requested
@@ -92,6 +95,7 @@ public extension MirageHostService {
             encoderConfig: effectiveEncoderConfig,
             streamScale: streamScale ?? 1.0,
             maxPacketSize: networkConfig.maxPacketSize,
+            mediaSecurityContext: mediaSecurityByClientID[client.id],
             disableResolutionCap: disableResolutionCap,
             latencyMode: latencyMode
         )

@@ -34,6 +34,7 @@ actor StreamContext {
     var captureMode: CaptureMode = .window
     /// Max payload size per UDP packet (excludes Mirage header).
     nonisolated let maxPayloadSize: Int
+    let mediaSecurityContext: MirageMediaSecurityContext?
     nonisolated(unsafe) var shouldEncodeFrames: Bool = true
 
     /// Window capture engine (used both for legacy and virtual display modes)
@@ -246,6 +247,7 @@ actor StreamContext {
         encoderConfig: MirageEncoderConfiguration,
         streamScale: CGFloat = 1.0,
         maxPacketSize: Int = mirageDefaultMaxPacketSize,
+        mediaSecurityContext: MirageMediaSecurityContext? = nil,
         additionalFrameFlags: FrameFlags = [],
         disableResolutionCap: Bool = false,
         latencyMode: MirageStreamLatencyMode = .smoothest
@@ -259,6 +261,7 @@ actor StreamContext {
         requestedStreamScale = clampedScale
         baseFrameFlags = additionalFrameFlags
         maxPayloadSize = miragePayloadSize(maxPacketSize: maxPacketSize)
+        self.mediaSecurityContext = mediaSecurityContext
         currentFrameRate = encoderConfig.targetFrameRate
         captureFrameRateOverride = nil
         captureFrameRate = encoderConfig.targetFrameRate

@@ -35,12 +35,25 @@ extension UnlockManager {
         let limit = checkRateLimit(clientID: clientID)
         if limit.isLimited { return (.failure(.rateLimited, "Too many attempts. Try again later."), limit.remaining, limit.retryAfter) }
 
+        let detectedState = await sessionMonitor.refreshState(notify: false)
+        guard detectedState.requiresUnlock else {
+            MirageLogger.host("Skipping unlock attempt because host session is already active")
+            return (.failure(.notLocked, "Host session is already unlocked."), limit.remaining, nil)
+        }
+
+        let requiresUsernameForAttempt = detectedState.requiresUsername
+        if requiresUsernameForAttempt != requiresUsername {
+            MirageLogger.host(
+                "Unlock request username requirement mismatch (request: \(requiresUsername), detected: \(requiresUsernameForAttempt)); using detected state"
+            )
+        }
+
         // Record this attempt
         recordAttempt(clientID: clientID)
         let remaining = getRemainingAttempts(clientID: clientID)
 
         let resolvedUsername: String
-        if requiresUsername {
+        if requiresUsernameForAttempt {
             guard let requestedUser = username?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !requestedUser.isEmpty else {
                 return (.failure(.invalidCredentials, "Username is required for login"), remaining, nil)
@@ -86,7 +99,7 @@ extension UnlockManager {
         // Loginwindow can appear after the display wakes on headless Macs.
         // A second readiness check reduces queued HID events.
         let loginReadyAfterWake = await waitForLoginWindowReady(timeout: 6.0)
-        if !loginReadyAfterWake { MirageLogger.host("Login window not detected after wake; continuing unlock attempt") }
+        if !loginReadyAfterWake { MirageLogger.host("Login window not detected after wake; continuing with non-HID unlock checks") }
 
         // Step 4: Try multiple unlock methods
         var unlocked = false
@@ -101,11 +114,41 @@ extension UnlockManager {
 
         // Method 2: HID-level typing (login screen or lock screen)
         if !unlocked {
-            MirageLogger.host("Typing credentials via HID...")
-            unlocked = await tryHIDUnlock(
-                username: requiresUsername ? resolvedUsername : nil,
-                password: password,
-                requiresUsername: requiresUsername
+            let stateBeforeHID = await sessionMonitor.refreshState(notify: false)
+            if !stateBeforeHID.requiresUnlock {
+                MirageLogger.host("Skipping HID unlock because host session became active")
+                unlocked = true
+            } else {
+                let lockUIReady: Bool
+                if loginReadyAfterWake {
+                    lockUIReady = true
+                } else {
+                    lockUIReady = await waitForLoginWindowReady(timeout: 1.5)
+                }
+                guard lockUIReady else {
+                    MirageLogger.error(.host, "Skipping HID unlock because lock UI is not visible")
+                    return (
+                        .failure(.timeout, "Lock screen is not ready for credential entry. Try again."),
+                        remaining,
+                        nil
+                    )
+                }
+
+                MirageLogger.host("Typing credentials via HID...")
+                unlocked = await tryHIDUnlock(
+                    username: requiresUsernameForAttempt ? resolvedUsername : nil,
+                    password: password,
+                    requiresUsername: requiresUsernameForAttempt
+                )
+            }
+        }
+
+        if !unlocked {
+            MirageLogger.host("Unlock methods did not activate session")
+            return (
+                .failure(.timeout, "Unable to reach lock screen for credential entry. Try again."),
+                remaining,
+                nil
             )
         }
 

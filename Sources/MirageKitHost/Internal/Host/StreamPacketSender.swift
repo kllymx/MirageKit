@@ -34,6 +34,7 @@ actor StreamPacketSender {
     }
 
     private let maxPayloadSize: Int
+    private let mediaSecurityContext: MirageMediaSecurityContext?
     private let onEncodedFrame: @Sendable (Data, FrameHeader, @escaping @Sendable () -> Void) -> Void
     private let packetBufferPool: PacketBufferPool
     private var sendTask: Task<Void, Never>?
@@ -57,11 +58,15 @@ actor StreamPacketSender {
 
     init(
         maxPayloadSize: Int,
+        mediaSecurityContext: MirageMediaSecurityContext? = nil,
         onEncodedFrame: @escaping @Sendable (Data, FrameHeader, @escaping @Sendable () -> Void) -> Void
     ) {
         self.maxPayloadSize = maxPayloadSize
+        self.mediaSecurityContext = mediaSecurityContext
         self.onEncodedFrame = onEncodedFrame
-        packetBufferPool = PacketBufferPool(capacity: mirageHeaderSize + maxPayloadSize)
+        packetBufferPool = PacketBufferPool(
+            capacity: mirageHeaderSize + maxPayloadSize + MirageMediaSecurity.authTagLength
+        )
     }
 
     func start() {
@@ -211,55 +216,76 @@ actor StreamPacketSender {
                 let end = min(start + maxPayload, frameByteCount)
                 let fragmentSize = end - start
                 guard fragmentSize > 0 else { continue }
+                let plainPayload = item.encodedData.subdata(in: start ..< end)
+                let checksum = CRC32.calculate(plainPayload)
+                var payloadFlags = flags
+                if mediaSecurityContext != nil {
+                    payloadFlags.insert(.encryptedPayload)
+                }
 
-                let packetLength = mirageHeaderSize + fragmentSize
+                let header = FrameHeader(
+                    flags: payloadFlags,
+                    streamID: item.streamID,
+                    sequenceNumber: currentSequence,
+                    timestamp: timestamp,
+                    frameNumber: item.frameNumber,
+                    fragmentIndex: UInt16(fragmentIndex),
+                    fragmentCount: UInt16(totalFragments),
+                    payloadLength: UInt32(fragmentSize),
+                    frameByteCount: UInt32(frameByteCount),
+                    checksum: checksum,
+                    contentRect: item.contentRect,
+                    dimensionToken: item.dimensionToken,
+                    epoch: item.epoch
+                )
+
+                let wirePayload: Data
+                if let mediaSecurityContext {
+                    do {
+                        wirePayload = try MirageMediaSecurity.encryptVideoPayload(
+                            plainPayload,
+                            header: header,
+                            context: mediaSecurityContext,
+                            direction: .hostToClient
+                        )
+                    } catch {
+                        MirageLogger.error(
+                            .stream,
+                            "Failed to encrypt video packet for stream \(item.streamID) frame \(item.frameNumber) seq \(currentSequence): \(error)"
+                        )
+                        continue
+                    }
+                } else {
+                    wirePayload = plainPayload
+                }
+
+                let packetLength = mirageHeaderSize + wirePayload.count
                 await paceIfNeeded(packetBytes: packetLength)
 
-                item.encodedData.withUnsafeBytes { buffer in
-                    guard let baseAddress = buffer.baseAddress else { return }
-                    let fragmentPtr = baseAddress.advanced(by: start)
-                    let fragmentBuffer = UnsafeRawBufferPointer(start: fragmentPtr, count: fragmentSize)
-                    let checksum = CRC32.calculate(fragmentBuffer)
-
-                    let header = FrameHeader(
-                        flags: flags,
-                        streamID: item.streamID,
-                        sequenceNumber: currentSequence,
-                        timestamp: timestamp,
-                        frameNumber: item.frameNumber,
-                        fragmentIndex: UInt16(fragmentIndex),
-                        fragmentCount: UInt16(totalFragments),
-                        payloadLength: UInt32(fragmentSize),
-                        frameByteCount: UInt32(frameByteCount),
-                        checksum: checksum,
-                        contentRect: item.contentRect,
-                        dimensionToken: item.dimensionToken,
-                        epoch: item.epoch
+                let packetBuffer = packetBufferPool.acquire()
+                packetBuffer.prepare(length: packetLength)
+                packetBuffer.withMutableBytes { packetBytes in
+                    guard packetBytes.count >= packetLength,
+                          let baseAddress = packetBytes.baseAddress else {
+                        return
+                    }
+                    let headerBuffer = UnsafeMutableRawBufferPointer(
+                        start: baseAddress,
+                        count: min(packetBytes.count, mirageHeaderSize)
                     )
-
-                    let packetBuffer = packetBufferPool.acquire()
-                    packetBuffer.prepare(length: packetLength)
-
-                    packetBuffer.withMutableBytes { packetBytes in
-                        guard packetBytes.count >= packetLength,
-                              let baseAddress = packetBytes.baseAddress else {
-                            return
-                        }
-                        let headerBuffer = UnsafeMutableRawBufferPointer(
-                            start: baseAddress,
-                            count: min(packetBytes.count, mirageHeaderSize)
-                        )
-                        header.serialize(into: headerBuffer)
+                    header.serialize(into: headerBuffer)
+                    wirePayload.withUnsafeBytes { payloadBytes in
+                        guard let payloadBase = payloadBytes.baseAddress else { return }
                         baseAddress.advanced(by: mirageHeaderSize).copyMemory(
-                            from: fragmentPtr,
-                            byteCount: fragmentSize
+                            from: payloadBase,
+                            byteCount: wirePayload.count
                         )
                     }
-
-                    let packet = packetBuffer.finalize(length: packetLength)
-                    let releasePacket: @Sendable () -> Void = { packetBuffer.release() }
-                    onEncodedFrame(packet, header, releasePacket)
                 }
+
+                let packet = packetBuffer.finalize(length: packetLength)
+                let releasePacket: @Sendable () -> Void = { packetBuffer.release() }
+                onEncodedFrame(packet, header, releasePacket)
             } else if parityFragmentCount > 0 {
                 let parityIndex = fragmentIndex - dataFragmentCount
                 let blockIndex = parityIndex
@@ -284,54 +310,75 @@ actor StreamPacketSender {
                 )
                 guard !parityData.isEmpty else { continue }
 
-                let packetLength = mirageHeaderSize + parityData.count
-                await paceIfNeeded(packetBytes: packetLength)
-
                 var parityFlags = flags
                 parityFlags.insert(.fecParity)
+                if mediaSecurityContext != nil {
+                    parityFlags.insert(.encryptedPayload)
+                }
 
-                parityData.withUnsafeBytes { parityBuffer in
-                    guard let parityBase = parityBuffer.baseAddress else { return }
-                    let checksum = CRC32.calculate(parityBuffer)
-                    let header = FrameHeader(
-                        flags: parityFlags,
-                        streamID: item.streamID,
-                        sequenceNumber: currentSequence,
-                        timestamp: timestamp,
-                        frameNumber: item.frameNumber,
-                        fragmentIndex: UInt16(fragmentIndex),
-                        fragmentCount: UInt16(totalFragments),
-                        payloadLength: UInt32(parityData.count),
-                        frameByteCount: UInt32(frameByteCount),
-                        checksum: checksum,
-                        contentRect: item.contentRect,
-                        dimensionToken: item.dimensionToken,
-                        epoch: item.epoch
-                    )
+                let checksum = CRC32.calculate(parityData)
+                let header = FrameHeader(
+                    flags: parityFlags,
+                    streamID: item.streamID,
+                    sequenceNumber: currentSequence,
+                    timestamp: timestamp,
+                    frameNumber: item.frameNumber,
+                    fragmentIndex: UInt16(fragmentIndex),
+                    fragmentCount: UInt16(totalFragments),
+                    payloadLength: UInt32(parityData.count),
+                    frameByteCount: UInt32(frameByteCount),
+                    checksum: checksum,
+                    contentRect: item.contentRect,
+                    dimensionToken: item.dimensionToken,
+                    epoch: item.epoch
+                )
 
-                    let packetBuffer = packetBufferPool.acquire()
-                    packetBuffer.prepare(length: packetLength)
-
-                    packetBuffer.withMutableBytes { packetBytes in
-                        guard packetBytes.count >= packetLength,
-                              let baseAddress = packetBytes.baseAddress else {
-                            return
-                        }
-                        let headerBuffer = UnsafeMutableRawBufferPointer(
-                            start: baseAddress,
-                            count: min(packetBytes.count, mirageHeaderSize)
+                let wirePayload: Data
+                if let mediaSecurityContext {
+                    do {
+                        wirePayload = try MirageMediaSecurity.encryptVideoPayload(
+                            parityData,
+                            header: header,
+                            context: mediaSecurityContext,
+                            direction: .hostToClient
                         )
-                        header.serialize(into: headerBuffer)
+                    } catch {
+                        MirageLogger.error(
+                            .stream,
+                            "Failed to encrypt parity packet for stream \(item.streamID) frame \(item.frameNumber) seq \(currentSequence): \(error)"
+                        )
+                        continue
+                    }
+                } else {
+                    wirePayload = parityData
+                }
+
+                await paceIfNeeded(packetBytes: mirageHeaderSize + wirePayload.count)
+
+                let packetBuffer = packetBufferPool.acquire()
+                packetBuffer.prepare(length: mirageHeaderSize + wirePayload.count)
+                packetBuffer.withMutableBytes { packetBytes in
+                    guard packetBytes.count >= mirageHeaderSize + wirePayload.count,
+                          let baseAddress = packetBytes.baseAddress else {
+                        return
+                    }
+                    let headerBuffer = UnsafeMutableRawBufferPointer(
+                        start: baseAddress,
+                        count: min(packetBytes.count, mirageHeaderSize)
+                    )
+                    header.serialize(into: headerBuffer)
+                    wirePayload.withUnsafeBytes { payloadBytes in
+                        guard let payloadBase = payloadBytes.baseAddress else { return }
                         baseAddress.advanced(by: mirageHeaderSize).copyMemory(
-                            from: parityBase,
-                            byteCount: parityData.count
+                            from: payloadBase,
+                            byteCount: wirePayload.count
                         )
                     }
-
-                    let packet = packetBuffer.finalize(length: packetLength)
-                    let releasePacket: @Sendable () -> Void = { packetBuffer.release() }
-                    onEncodedFrame(packet, header, releasePacket)
                 }
+
+                let packet = packetBuffer.finalize(length: mirageHeaderSize + wirePayload.count)
+                let releasePacket: @Sendable () -> Void = { packetBuffer.release() }
+                onEncodedFrame(packet, header, releasePacket)
             }
             currentSequence += 1
         }

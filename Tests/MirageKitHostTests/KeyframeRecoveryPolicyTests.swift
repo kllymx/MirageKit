@@ -52,6 +52,24 @@ struct KeyframeRecoveryPolicyTests {
         #expect(mapped.keyframeQuality <= mapped.frameQuality)
     }
 
+    @Test("Quality mapper lowers quality for bitrate-constrained streams")
+    func bitrateQualityCompressionBias() {
+        let constrained = MirageBitrateQualityMapper.derivedQualities(
+            targetBitrateBps: 20_000_000,
+            width: 3840,
+            height: 2160,
+            frameRate: 60
+        )
+        let unconstrained = MirageBitrateQualityMapper.derivedQualities(
+            targetBitrateBps: 400_000_000,
+            width: 3840,
+            height: 2160,
+            frameRate: 60
+        )
+        #expect(constrained.frameQuality < unconstrained.frameQuality)
+        #expect(constrained.frameQuality <= 0.30)
+    }
+
     @Test("Soft recovery keeps P-frame FEC off and hard recovery enables it")
     func fecEscalationPolicy() async throws {
         let context = makeContext()

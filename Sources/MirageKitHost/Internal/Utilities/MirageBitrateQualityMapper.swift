@@ -12,6 +12,7 @@ import MirageKit
 
 enum MirageBitrateQualityMapper {
     static let frameQualityCeiling: Float = 0.80
+    private static let minimumFrameQuality: Double = 0.08
 
     private struct Point {
         let bpp: Double
@@ -19,12 +20,13 @@ enum MirageBitrateQualityMapper {
     }
 
     private static let points: [Point] = [
-        Point(bpp: 0.02, quality: 0.15),
-        Point(bpp: 0.05, quality: 0.35),
-        Point(bpp: 0.08, quality: 0.60),
-        Point(bpp: 0.12, quality: 0.80),
-        Point(bpp: 0.18, quality: 0.92),
-        Point(bpp: 0.25, quality: 1.0),
+        Point(bpp: 0.015, quality: 0.10),
+        Point(bpp: 0.03, quality: 0.20),
+        Point(bpp: 0.05, quality: 0.32),
+        Point(bpp: 0.08, quality: 0.50),
+        Point(bpp: 0.12, quality: 0.68),
+        Point(bpp: 0.18, quality: 0.80),
+        Point(bpp: 0.25, quality: 0.92),
     ]
 
     static func normalizedTargetBitrate(bitrate: Int?) -> Int? {
@@ -39,7 +41,7 @@ enum MirageBitrateQualityMapper {
         frameRate: Int
     ) -> (frameQuality: Float, keyframeQuality: Float) {
         let defaultFrameQuality = min(Float(0.80), frameQualityCeiling)
-        let defaultKeyframeQuality = max(0.1, min(defaultFrameQuality, defaultFrameQuality * 0.85))
+        let defaultKeyframeQuality = max(Float(minimumFrameQuality), min(defaultFrameQuality, defaultFrameQuality * 0.85))
         guard targetBitrateBps > 0, width > 0, height > 0, frameRate > 0 else {
             return (frameQuality: defaultFrameQuality, keyframeQuality: defaultKeyframeQuality)
         }
@@ -51,8 +53,13 @@ enum MirageBitrateQualityMapper {
 
         let bpp = Double(targetBitrateBps) / pixelsPerSecond
         let mappedQuality = interpolateQuality(for: bpp)
-        let frameQuality = Float(max(0.1, min(Double(frameQualityCeiling), mappedQuality)))
-        let keyframeQuality = Float(max(0.1, min(frameQuality, frameQuality * 0.85)))
+        let frameQuality = Float(max(minimumFrameQuality, min(Double(frameQualityCeiling), mappedQuality)))
+        let keyframeQuality = Float(
+            max(
+                minimumFrameQuality,
+                min(Double(frameQuality), Double(frameQuality) * 0.85)
+            )
+        )
         return (frameQuality, keyframeQuality)
     }
 

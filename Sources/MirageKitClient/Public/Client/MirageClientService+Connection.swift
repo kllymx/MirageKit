@@ -144,6 +144,7 @@ extension MirageClientService {
         connectionState = .connecting
         expectedHostIdentityKeyID = host.capabilities.identityKeyID
         connectedHostIdentityKeyID = nil
+        setMediaSecurityContext(nil)
         await handshakeReplayProtector.reset()
         isAwaitingManualApproval = false
         hasReceivedHelloResponse = false
@@ -264,6 +265,7 @@ extension MirageClientService {
         expectedHostIdentityKeyID = nil
         connectedHostIdentityKeyID = nil
         pendingHelloNonce = nil
+        setMediaSecurityContext(nil)
         receiveBuffer = Data()
         await transport?.disconnect()
         transport = nil

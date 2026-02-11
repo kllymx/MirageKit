@@ -97,12 +97,16 @@ extension MirageClientService {
     func sendAudioRegistration(streamID: StreamID) async throws {
         guard let audioConnection else { throw MirageError.protocolError("No audio UDP connection") }
         guard audioRegisteredStreamID != streamID else { return }
+        guard let mediaSecurityContext else {
+            throw MirageError.protocolError("Missing media security context")
+        }
 
         var data = Data()
         // Registration packets use network byte order for magic bytes ("MIRA").
         withUnsafeBytes(of: mirageAudioRegistrationMagic.bigEndian) { data.append(contentsOf: $0) }
         withUnsafeBytes(of: streamID.littleEndian) { data.append(contentsOf: $0) }
         withUnsafeBytes(of: deviceID.uuid) { data.append(contentsOf: $0) }
+        data.append(mediaSecurityContext.udpRegistrationToken)
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             audioConnection.send(content: data, completion: .contentProcessed { error in
@@ -113,7 +117,9 @@ extension MirageClientService {
         }
 
         audioRegisteredStreamID = streamID
-        MirageLogger.client("Audio registration sent for stream \(streamID)")
+        MirageLogger.client(
+            "Audio registration sent for stream \(streamID) (tokenBytes=\(mediaSecurityContext.udpRegistrationToken.count))"
+        )
     }
 
     func handleAudioStreamStarted(_ message: ControlMessage) {
@@ -183,12 +189,46 @@ extension MirageClientService {
                         return
                     }
 
-                    let payload = data.dropFirst(mirageAudioHeaderSize)
-                    guard payload.count == Int(header.payloadLength) else {
+                    let wirePayload = Data(data.dropFirst(mirageAudioHeaderSize))
+                    let expectedWireLength = header.flags.contains(.encryptedPayload)
+                        ? Int(header.payloadLength) + MirageMediaSecurity.authTagLength
+                        : Int(header.payloadLength)
+                    guard wirePayload.count == expectedWireLength else {
                         receiveNext()
                         return
                     }
-                    let payloadData = Data(payload)
+                    let payloadData: Data
+                    if header.flags.contains(.encryptedPayload) {
+                        guard let mediaSecurityContext = service.mediaSecurityContextForNetworking else {
+                            MirageLogger.error(
+                                .client,
+                                "Dropping encrypted audio packet without media security context (stream \(header.streamID))"
+                            )
+                            receiveNext()
+                            return
+                        }
+                        do {
+                            payloadData = try MirageMediaSecurity.decryptAudioPayload(
+                                wirePayload,
+                                header: header,
+                                context: mediaSecurityContext,
+                                direction: .hostToClient
+                            )
+                        } catch {
+                            MirageLogger.error(
+                                .client,
+                                "Failed to decrypt audio packet stream \(header.streamID) frame \(header.frameNumber) seq \(header.sequenceNumber): \(error)"
+                            )
+                            receiveNext()
+                            return
+                        }
+                        guard payloadData.count == Int(header.payloadLength) else {
+                            receiveNext()
+                            return
+                        }
+                    } else {
+                        payloadData = wirePayload
+                    }
                     guard CRC32.calculate(payloadData) == header.checksum else {
                         receiveNext()
                         return

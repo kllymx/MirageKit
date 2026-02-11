@@ -47,6 +47,9 @@ extension MirageHostService {
             MirageLogger.host("Desktop stream already active")
             return
         }
+        guard mediaSecurityByClientID[clientContext.client.id] != nil else {
+            throw MirageError.protocolError("Missing media security context for desktop stream client")
+        }
 
         let desktopStartTime = CFAbsoluteTimeGetCurrent()
         func logDesktopStartStep(_ step: String) {
@@ -243,6 +246,7 @@ extension MirageHostService {
             encoderConfig: config,
             streamScale: clampedStreamScale,
             maxPacketSize: networkConfig.maxPacketSize,
+            mediaSecurityContext: mediaSecurityByClientID[clientContext.client.id],
             additionalFrameFlags: [.desktopStream],
             disableResolutionCap: disableResolutionCap,
             latencyMode: latencyMode

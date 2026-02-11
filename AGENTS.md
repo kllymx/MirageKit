@@ -10,6 +10,7 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - ProMotion preference: refresh override based on MTKView cadence, 120 when supported and enabled, otherwise 60.
 - Backpressure: queue-based frame drops.
 - Encoder quality: derived from target bitrate and output resolution; QP bounds mapping when supported.
+- Bitrate-derived quality mapping biases low-bitrate streams toward stronger compression, and queue-pressure quality drops accelerate for bitrate-constrained streams.
 - Capture pixel format: 10-bit P010 when supported; NV12 fallback; 4:4:4 formats only when explicitly selected.
 - Encode flow: limited in-flight frames; completion-driven next encode.
 - In-flight cap: 120Hz 2 frames; 60Hz 1 frame.
@@ -21,10 +22,13 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - Custom mode: encoder overrides for pixel format, color space, bitrate, and keyframe interval.
 - `MIRAGE_SIGNPOST=1` enables Instruments signposts for decode/render timing.
 - Automatic quality tests use staged UDP payloads (warmup + ramp until plateau) plus VideoToolbox benchmarks for encode/decode timing; quality probes use a SwiftUI animated probe scene and a transport probe that sends real encoded frames over UDP.
+- Automatic quality selection uses staged throughput/loss as the bitrate baseline with probe constraints for resolution and pixel-format viability; probe-only fallback applies when staged throughput is unavailable.
+- Automatic quality test cadence follows ProMotion preference (max refresh when enabled, 60 Hz cap when disabled), and probe transport caps use 98% headroom when transport metrics are present.
 - Host setting `muteLocalAudioWhileStreaming` mutes host output while audio streaming is active and restores prior mute state when audio streaming stops.
 - MirageKit targets the latest supported OS releases; availability checks are not used in MirageKit code.
 - Lights Out mode: host-side blackout overlay + input block for app streaming and mirrored desktop streaming; overlay windows are excluded from display capture.
 - Lights Out emergency shortcut: host service exposes a configurable local shortcut that is matched inside the Lights Out event tap to run emergency recovery (disconnect clients, clear overlays, lock host).
+- Remote unlock HID credential entry requires visible lock/login UI; if lock UI is not visible, unlock returns a retryable timeout without typing into the active app session.
 - Client startup retries stream registration until the first UDP packet arrives.
 - Virtual display serial recovery alternates between two deterministic serial slots per color space to bound ColorSync profile churn while preserving mode-mismatch recovery.
 - Virtual display creation attempts Retina first and can fall back to 1x logical resolution when Retina activation does not validate; display snapshots carry active scale factors so bounds, capture, and input paths follow the active mode.
@@ -38,8 +42,12 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - iOS/visionOS virtual-display sizing derives from native screen metrics (`nativeBounds`, `nativeScale`) while drawable-size callbacks continue to drive live desktop resize transactions.
 - Host/client control-message dispatch uses handler registries keyed by `ControlMessageType`.
 - Signed identity handshake v2 requires `identityAuthV2` with canonical payload signatures and replay protection.
+- Accepted hello negotiation requires `identityAuthV2`, `udpRegistrationAuthV1`, and `encryptedMediaV1`; signed hello responses include `mediaEncryptionEnabled` plus a per-session UDP registration token.
+- Media-session security uses ECDH/HKDF-derived keys with ChaCha20-Poly1305 for UDP video/audio and parity payloads, and client packet handling decrypts encrypted payloads before reassembly and CRC checks.
+- UDP stream/audio/quality registrations carry the per-session token and host registration validates token matches in constant time.
 - Remote signaling helpers include signed Worker requests, STUN probes, and host candidate parsing for direct remote readiness.
 - Host remote path runs a dedicated QUIC control listener (`MirageHostService+Remote.swift`) and publishes STUN-derived `hostCandidates` through signed signaling heartbeats.
+- Remote diagnostics logging spans client remote preflight/join/connect, host remote listener and advertise/heartbeat loops, and signaling request outcomes.
 
 ## Interaction Guidelines
 - Planning phase: detailed step list; explicit plan.

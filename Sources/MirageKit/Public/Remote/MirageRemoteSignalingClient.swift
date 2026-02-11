@@ -302,6 +302,9 @@ public final class MirageRemoteSignalingClient {
         let timestampMs = MirageIdentitySigning.currentTimestampMs()
         let bodyHash = Self.sha256Hex(bodyData ?? Data("-".utf8))
         let appAuthentication = configuration.appAuthentication
+        MirageLogger.network(
+            "Remote signaling request \(method.uppercased()) \(path) session=\(sessionID) keyID=\(identity.keyID) bodyBytes=\(bodyData?.count ?? 0)"
+        )
         let appAuthPayload = Self.appAuthPayload(
             method: method,
             path: path,
@@ -346,17 +349,25 @@ public final class MirageRemoteSignalingClient {
 
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
+            MirageLogger.error(.network, "Remote signaling invalid response for \(method.uppercased()) \(path)")
             throw MirageRemoteSignalingError.invalidResponse
         }
 
         guard (200 ... 299).contains(http.statusCode) else {
             let parsed = parseErrorPayload(data)
+            MirageLogger.error(
+                .network,
+                "Remote signaling HTTP \(http.statusCode) \(method.uppercased()) \(path) error=\(parsed.errorCode ?? "none") detail=\(parsed.detail ?? "none")"
+            )
             throw MirageRemoteSignalingError.http(
                 statusCode: http.statusCode,
                 errorCode: parsed.errorCode,
                 detail: parsed.detail
             )
         }
+        MirageLogger.network(
+            "Remote signaling success \(method.uppercased()) \(path) status=\(http.statusCode) bytes=\(data.count)"
+        )
 
         return (http, data)
     }
