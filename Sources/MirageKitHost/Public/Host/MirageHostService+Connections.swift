@@ -23,10 +23,15 @@ extension MirageHostService {
     }
 
     private enum ApprovalOutcome {
-        case accepted
+        case accepted(autoTrustGranted: Bool)
         case rejected
         case connectionClosed
         case timedOut
+    }
+
+    private enum TrustApprovalDecision {
+        case accepted(autoTrustGranted: Bool)
+        case rejected
     }
 
     private actor ApprovalDecisionGate {
@@ -138,7 +143,10 @@ extension MirageHostService {
         connection.stateUpdateHandler = nil
 
         switch approvalOutcome {
-        case .accepted:
+        case let .accepted(autoTrustGranted):
+            MirageLogger.host(
+                "Connection approved (\(autoTrustGranted ? "auto-trust" : "manual approval")), sending hello response..."
+            )
             break
         case .rejected:
             MirageLogger.host("Connection rejected")
@@ -154,7 +162,12 @@ extension MirageHostService {
             return
         }
 
-        MirageLogger.host("Connection approved, sending hello response...")
+        let autoTrustGranted: Bool
+        if case let .accepted(value) = approvalOutcome {
+            autoTrustGranted = value
+        } else {
+            autoTrustGranted = false
+        }
         let responseResult = sendHelloResponse(
             accepted: true,
             to: connection,
@@ -162,6 +175,7 @@ extension MirageHostService {
             negotiation: hello.negotiation,
             deviceInfo: hello.deviceInfo,
             requestNonce: hello.requestNonce,
+            autoTrustGranted: autoTrustGranted,
             cancelAfterSend: false
         )
         guard responseResult.sent else {
@@ -348,7 +362,7 @@ extension MirageHostService {
     }
 
     /// Evaluates trust using the provider and falls back to delegate approval if needed.
-    private func evaluateTrustAndApproval(for deviceInfo: MirageDeviceInfo) async -> Bool {
+    private func evaluateTrustAndApproval(for deviceInfo: MirageDeviceInfo) async -> TrustApprovalDecision {
         // If a trust provider is set, consult it first
         if let trustProvider {
             let peerIdentity = MiragePeerIdentity(
@@ -367,11 +381,11 @@ extension MirageHostService {
             switch decision {
             case .trusted:
                 MirageLogger.host("Connection auto-approved by trust provider for \(deviceInfo.name)")
-                return true
+                return .accepted(autoTrustGranted: true)
 
             case .denied:
                 MirageLogger.host("Connection denied by trust provider for \(deviceInfo.name)")
-                return false
+                return .rejected
 
             case .requiresApproval:
                 MirageLogger.host("Trust provider requires approval for \(deviceInfo.name)")
@@ -388,14 +402,14 @@ extension MirageHostService {
         MirageLogger.host("Requesting approval for \(deviceInfo.name) (\(deviceInfo.deviceType.displayName))...")
 
         return await withCheckedContinuation { continuation in
-            let box = SafeContinuationBox<Bool>(continuation)
+            let box = SafeContinuationBox<TrustApprovalDecision>(continuation)
             if let delegate {
                 delegate.hostService(self, shouldAcceptConnectionFrom: deviceInfo) { accepted in
-                    box.resume(returning: accepted)
+                    box.resume(returning: accepted ? .accepted(autoTrustGranted: false) : .rejected)
                 }
             } else {
                 // No delegate and no trust provider decision - accept by default
-                box.resume(returning: true)
+                box.resume(returning: .accepted(autoTrustGranted: false))
             }
         }
     }
@@ -409,8 +423,13 @@ extension MirageHostService {
             let gate = ApprovalDecisionGate(box: box)
 
             let approvalTask = Task { @MainActor in
-                let approved = await self.evaluateTrustAndApproval(for: deviceInfo)
-                await gate.finish(approved ? .accepted : .rejected)
+                let decision = await self.evaluateTrustAndApproval(for: deviceInfo)
+                switch decision {
+                case let .accepted(autoTrustGranted):
+                    await gate.finish(.accepted(autoTrustGranted: autoTrustGranted))
+                case .rejected:
+                    await gate.finish(.rejected)
+                }
             }
 
             let closureTask = Task { @MainActor in
@@ -481,6 +500,7 @@ extension MirageHostService {
         negotiation: MirageProtocolNegotiation,
         deviceInfo: MirageDeviceInfo,
         requestNonce: String,
+        autoTrustGranted: Bool = false,
         cancelAfterSend: Bool
     )
     -> (sent: Bool, mediaSecurity: MirageMediaSecurityContext?) {
@@ -548,6 +568,7 @@ extension MirageHostService {
                 requestNonce: requestNonce,
                 mediaEncryptionEnabled: mediaEncryptionEnabled,
                 udpRegistrationToken: udpRegistrationToken,
+                autoTrustGranted: autoTrustGranted,
                 identity: MirageIdentityEnvelope(
                     keyID: identity.keyID,
                     publicKey: identity.publicKey,

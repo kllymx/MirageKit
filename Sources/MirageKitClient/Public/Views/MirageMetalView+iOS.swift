@@ -75,6 +75,8 @@ public class MirageMetalView: MTKView {
     private var drawStatsRenderLatencyMax: CFAbsoluteTime = 0
     private var drawableRetryScheduled = false
     private var drawableRetryTask: Task<Void, Never>?
+    private var noDrawableSkipsSinceLog: UInt64 = 0
+    private var lastNoDrawableLogTime: CFAbsoluteTime = 0
     private var renderDiagnostics = RenderDiagnostics()
     private var drawScheduled = false
     private var inFlightDraws: Int = 0
@@ -89,7 +91,8 @@ public class MirageMetalView: MTKView {
     private static let maxDrawableWidth: CGFloat = 5120
     private static let maxDrawableHeight: CGFloat = 2880
     private var maxInFlightDraws: Int {
-        let desired = maxRenderFPS >= 120 ? 2 : 1
+        // Keep two frames in flight at 60Hz so presentation is not gated by a single completion boundary.
+        let desired = 2
         if let metalLayer = layer as? CAMetalLayer {
             return max(1, min(desired, metalLayer.maximumDrawableCount - 1))
         }
@@ -177,6 +180,7 @@ public class MirageMetalView: MTKView {
         renderingSuspended = true
         drawableRetryTask?.cancel()
         drawableRetryTask = nil
+        drawableRetryScheduled = false
     }
 
     public func resumeRendering() {
@@ -211,7 +215,7 @@ public class MirageMetalView: MTKView {
     @MainActor
     func renderSchedulerTick() {
         guard !renderingSuspended else { return }
-        guard !drawScheduled, inFlightDraws < maxInFlightDraws else { return }
+        guard !drawScheduled, !drawableRetryScheduled, inFlightDraws < maxInFlightDraws else { return }
         drawScheduled = true
         draw()
     }
@@ -441,6 +445,8 @@ public class MirageMetalView: MTKView {
 
         guard let drawable else {
             renderDiagnostics.skipNoDrawable &+= 1
+            noDrawableSkipsSinceLog &+= 1
+            maybeLogDrawableStarvation()
             scheduleDrawableRetry()
             finishDraw()
             maybeLogRenderDiagnostics(now: CFAbsoluteTimeGetCurrent())
@@ -493,6 +499,21 @@ public class MirageMetalView: MTKView {
             renderState.markNeedsRedraw()
             requestDraw()
         }
+    }
+
+    private func maybeLogDrawableStarvation(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) {
+        guard MirageLogger.isEnabled(.renderer) else { return }
+        if lastNoDrawableLogTime == 0 {
+            lastNoDrawableLogTime = now
+            return
+        }
+        guard now - lastNoDrawableLogTime >= 1.0 else { return }
+        let elapsedText = (now - lastNoDrawableLogTime).formatted(.number.precision(.fractionLength(1)))
+        MirageLogger.renderer(
+            "Drawable unavailable on iOS/visionOS view; retries=\(noDrawableSkipsSinceLog) in last \(elapsedText)s"
+        )
+        noDrawableSkipsSinceLog = 0
+        lastNoDrawableLogTime = now
     }
 
     private func recordDrawCompletion(

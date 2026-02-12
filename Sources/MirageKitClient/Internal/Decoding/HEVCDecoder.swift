@@ -38,6 +38,11 @@ actor HEVCDecoder {
     /// Thread-safe decode performance tracker (updated from decode callback)
     let performanceTracker = DecodePerformanceTracker()
 
+    /// Bounded in-flight decode submissions to avoid decoder saturation spirals.
+    var decodeSubmissionLimit: Int = 2
+    var inFlightDecodeSubmissions: Int = 0
+    var decodeSubmissionWaiters: [CheckedContinuation<Void, Never>] = []
+
     /// Handler called when video dimensions change - used to reset reassembler
     var onDimensionChange: (@Sendable () -> Void)?
 
@@ -115,6 +120,7 @@ final class DecodeInfo: @unchecked Sendable {
     let errorTracker: DecodeErrorTracker?
     let decodeStartTime: CFAbsoluteTime
     let performanceTracker: DecodePerformanceTracker?
+    let onCompletion: (@Sendable () -> Void)?
     let releaseBuffer: (@Sendable () -> Void)?
     let data: Data
 
@@ -124,6 +130,7 @@ final class DecodeInfo: @unchecked Sendable {
         errorTracker: DecodeErrorTracker?,
         decodeStartTime: CFAbsoluteTime,
         performanceTracker: DecodePerformanceTracker?,
+        onCompletion: (@Sendable () -> Void)?,
         releaseBuffer: (@Sendable () -> Void)?,
         data: Data
     ) {
@@ -132,6 +139,7 @@ final class DecodeInfo: @unchecked Sendable {
         self.errorTracker = errorTracker
         self.decodeStartTime = decodeStartTime
         self.performanceTracker = performanceTracker
+        self.onCompletion = onCompletion
         self.releaseBuffer = releaseBuffer
         self.data = data
     }
@@ -167,6 +175,10 @@ final class DecodeErrorTracker: @unchecked Sendable {
 
     /// Minimum time between session recreations (seconds)
     let sessionRecreationCooldown: CFAbsoluteTime = 2.0
+
+    /// Require a short run of successful decode callbacks before clearing recovery state.
+    let recoverySuccessThreshold: Int = 3
+    var recoverySuccessCount: Int = 0
 
     init(
         maxErrors: Int,

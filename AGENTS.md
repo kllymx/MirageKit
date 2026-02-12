@@ -152,6 +152,10 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 - Adaptive fallback: automatic mode applies bitrate-only steps first (15% per trigger, 15-second cooldown, 8 Mbps floor) before disruptive reconfiguration.
 - Custom mode recovery: stream parameters remain fixed while stream-health warnings report sustained degradation.
 - Decoder recovery: client enters keyframe-only mode after decode errors or decode-backpressure overload until a fresh keyframe arrives.
+- Decode backpressure recovery performs full stream recovery (decoder reset, reassembler reset/keyframe-only, queue flush, and keyframe request) instead of continuing through stale P-frame references.
+- Adaptive fallback triggers on decode-storm episodes (two decode-threshold events within an 8-second window) in addition to queue-drop overload signals.
+- Client decode submission in-flight limits are frame-rate aware (60Hz: 2, 120Hz: 3) to bound asynchronous VideoToolbox submission pressure.
+- Client freeze monitoring requests a recovery keyframe after sustained decode stalls and escalates to full stream recovery on repeated stall windows.
 
 ## Input Handling
 - Host input clears stuck modifiers after 0.5s of modifier inactivity.

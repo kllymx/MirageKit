@@ -338,6 +338,59 @@ public final class MirageCloudKitShareManager {
         }
     }
 
+    /// Removes stale own-host records that match the current host identity and name
+    /// but use a different device identifier.
+    ///
+    /// - Parameters:
+    ///   - currentDeviceID: Device ID of the running host.
+    ///   - currentHostName: Current host display name.
+    ///   - currentIdentityKeyID: Current host identity key ID.
+    /// - Returns: Number of deleted stale host records.
+    public func cleanupStaleOwnHosts(
+        currentDeviceID: UUID,
+        currentHostName: String,
+        currentIdentityKeyID: String?
+    ) async throws -> Int {
+        guard let currentIdentityKeyID,
+              let container = cloudKitManager.container else {
+            return 0
+        }
+
+        let database = container.privateCloudDatabase
+        let query = CKQuery(
+            recordType: cloudKitManager.configuration.hostRecordType,
+            predicate: NSPredicate(value: true)
+        )
+
+        let (results, _) = try await database.records(matching: query, inZoneWith: hostZoneID)
+        let normalizedCurrentName = normalizeHostName(currentHostName)
+        var staleRecordIDs: [CKRecord.ID] = []
+
+        for (_, result) in results {
+            guard case let .success(record) = result else { continue }
+
+            let recordDeviceID = parseRecordDeviceID(record)
+            guard let recordDeviceID,
+                  recordDeviceID != currentDeviceID else { continue }
+
+            let recordIdentityKeyID = record[MirageCloudKitHostInfo.RecordKey.identityKeyID.rawValue] as? String
+            guard recordIdentityKeyID == currentIdentityKeyID else { continue }
+
+            let recordName = (record[MirageCloudKitHostInfo.RecordKey.name.rawValue] as? String) ?? ""
+            guard normalizeHostName(recordName) == normalizedCurrentName else { continue }
+
+            staleRecordIDs.append(record.recordID)
+        }
+
+        guard !staleRecordIDs.isEmpty else { return 0 }
+
+        _ = try await database.modifyRecords(
+            saving: [],
+            deleting: staleRecordIDs
+        )
+        return staleRecordIDs.count
+    }
+
     // MARK: - Share Management
 
     /// Fetches the share for a host record.
@@ -487,6 +540,19 @@ public final class MirageCloudKitShareManager {
 
         // Refresh participant cache
         cloudKitManager.clearShareParticipantCache()
+    }
+
+    private func normalizeHostName(_ name: String) -> String {
+        name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func parseRecordDeviceID(_ record: CKRecord) -> UUID? {
+        if let rawDeviceID = record[MirageCloudKitHostInfo.RecordKey.deviceID.rawValue] as? String,
+           let deviceID = UUID(uuidString: rawDeviceID) {
+            return deviceID
+        }
+
+        return UUID(uuidString: record.recordID.recordName)
     }
 }
 

@@ -776,7 +776,9 @@ extension InputCapturingView {
 
 extension InputCapturingView: UIGestureRecognizerDelegate {
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        guard isStylusTouch(touch) else { return true }
+        let isStylus = isStylusTouch(touch)
+        if touch.type == .direct, !isStylus { onDirectTouchActivity?() }
+        guard isStylus else { return true }
 
         // Route Pencil contact through dedicated touch handlers only.
         // This prevents fallback long-press/pan gestures from flattening stylus data.

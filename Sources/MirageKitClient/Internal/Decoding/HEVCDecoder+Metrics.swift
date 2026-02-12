@@ -20,6 +20,7 @@ extension DecodeErrorTracker {
 
         consecutiveErrors += 1
         totalErrors += 1
+        recoverySuccessCount = 0
         let now = CFAbsoluteTimeGetCurrent()
 
         // Initial threshold fire
@@ -41,6 +42,7 @@ extension DecodeErrorTracker {
             if timeSinceLastRequest >= retryInterval {
                 lastThresholdTime = now
                 consecutiveErrors = 0 // Reset counter for next retry cycle
+                recoverySuccessCount = 0
                 lock.unlock()
                 MirageLogger
                     .decoder("Keyframe retry - errors persisted for \(String(format: "%.1f", timeSinceLastRequest))s")
@@ -53,8 +55,20 @@ extension DecodeErrorTracker {
     func recordSuccess() {
         lock.lock()
 
-        let wasInErrorState = thresholdFired || consecutiveErrors > maxConsecutiveErrors
-        if consecutiveErrors > 0 || sessionRecreationAttempted {
+        let wasInRecoveryState = thresholdFired || consecutiveErrors > 0 || sessionRecreationAttempted
+        if thresholdFired || sessionRecreationAttempted {
+            recoverySuccessCount += 1
+            if recoverySuccessCount < recoverySuccessThreshold {
+                if recoverySuccessCount == 1 || recoverySuccessCount == recoverySuccessThreshold - 1 {
+                    MirageLogger
+                        .decoder("Decode recovery progress \(recoverySuccessCount)/\(recoverySuccessThreshold) before clear")
+                }
+                lock.unlock()
+                return
+            }
+        }
+
+        if consecutiveErrors > 0 || sessionRecreationAttempted || wasInRecoveryState {
             MirageLogger
                 .decoder(
                     "Decode recovered after \(consecutiveErrors) consecutive errors (sessionRecreated=\(sessionRecreationAttempted))"
@@ -63,11 +77,12 @@ extension DecodeErrorTracker {
         consecutiveErrors = 0
         thresholdFired = false
         sessionRecreationAttempted = false
+        recoverySuccessCount = 0
 
         lock.unlock()
 
         // Notify recovery if we were in an error state (input was blocked)
-        if wasInErrorState { onRecovery?() }
+        if wasInRecoveryState { onRecovery?() }
     }
 
     func requestKeyframeForDimensionChange() {
@@ -75,6 +90,7 @@ extension DecodeErrorTracker {
         consecutiveErrors = 0 // Reset since dimension change makes error count meaningless
         thresholdFired = true // Mark as already fired to prevent duplicate immediate requests
         lastThresholdTime = CFAbsoluteTimeGetCurrent()
+        recoverySuccessCount = 0
         lock.unlock()
 
         MirageLogger.decoder("Requesting keyframe due to dimension change")
@@ -112,7 +128,19 @@ extension DecodeErrorTracker {
         thresholdFired = false
         sessionRecreationAttempted = false
         lastSessionRecreationTime = 0
+        recoverySuccessCount = 0
         MirageLogger.decoder("Error tracking cleared for dimension change")
+    }
+
+    func clearForSessionReset() {
+        lock.lock()
+        defer { lock.unlock() }
+        consecutiveErrors = 0
+        thresholdFired = false
+        sessionRecreationAttempted = false
+        lastSessionRecreationTime = 0
+        recoverySuccessCount = 0
+        MirageLogger.decoder("Error tracking cleared for session reset")
     }
 
     func totalErrorsSnapshot() -> UInt64 {

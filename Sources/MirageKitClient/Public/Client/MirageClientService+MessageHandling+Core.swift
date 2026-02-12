@@ -125,10 +125,18 @@ extension MirageClientService {
             isAwaitingManualApproval = false
             approvalWaitTask?.cancel()
             if response.accepted {
-                let noticeKey = "com.mirage.autotrust.client.\(response.hostID.uuidString.lowercased()).\(identity.keyID)"
-                if !UserDefaults.standard.bool(forKey: noticeKey) {
-                    UserDefaults.standard.set(true, forKey: noticeKey)
-                    onAutoTrustNotice?("Auto-approved trusted iCloud identity for \(response.hostName).")
+                if response.autoTrustGranted == true {
+                    let noticeKey = "com.mirage.autotrust.client.\(response.hostID.uuidString.lowercased()).\(identity.keyID)"
+                    if !UserDefaults.standard.bool(forKey: noticeKey) {
+                        UserDefaults.standard.set(true, forKey: noticeKey)
+                        let hostDisplayName = response.hostName
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        if hostDisplayName.isEmpty {
+                            onAutoTrustNotice?("Auto-approved trusted iCloud identity for this host.")
+                        } else {
+                            onAutoTrustNotice?("Auto-approved trusted iCloud identity for \(hostDisplayName).")
+                        }
+                    }
                 }
                 if response.negotiation.protocolVersion != Int(MirageKit.protocolVersion) {
                     connectionState = .error("Protocol version mismatch")
@@ -272,6 +280,11 @@ extension MirageClientService {
 
     func handleStreamMetricsUpdate(_ message: ControlMessage) {
         if let metrics = try? message.decode(StreamMetricsMessage.self) {
+            if let controller = controllersByStream[metrics.streamID] {
+                Task {
+                    await controller.updateDecodeSubmissionLimit(targetFrameRate: metrics.targetFrameRate)
+                }
+            }
             metricsStore.updateHostMetrics(
                 streamID: metrics.streamID,
                 encodedFPS: metrics.encodedFPS,

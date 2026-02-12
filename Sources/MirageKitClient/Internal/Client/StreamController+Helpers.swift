@@ -24,6 +24,7 @@ extension StreamController {
 
     func recordDecodedFrame() {
         lastDecodedFrameTime = CFAbsoluteTimeGetCurrent()
+        consecutiveFreezeRecoveries = 0
         startFreezeMonitorIfNeeded()
         if isInputBlocked { updateInputBlocking(false) }
     }
@@ -47,22 +48,27 @@ extension StreamController {
         maybeSignalAdaptiveFallback(now: now)
     }
 
-    func maybeTriggerBackpressureRecovery() {
+    func recordDecodeThresholdEvent() {
+        let now = CFAbsoluteTimeGetCurrent()
+        decodeThresholdTimestamps.append(now)
+        trimOverloadWindow(now: now)
+        maybeSignalAdaptiveFallback(now: now)
+    }
+
+    func maybeTriggerBackpressureRecovery(queueDepth: Int) {
         let now = CFAbsoluteTimeGetCurrent()
         if lastBackpressureRecoveryTime > 0,
            now - lastBackpressureRecoveryTime < Self.backpressureRecoveryCooldown {
             return
         }
         lastBackpressureRecoveryTime = now
-        reassembler.enterKeyframeOnlyMode()
         Task { [weak self] in
             guard let self else { return }
-            await self.startKeyframeRecoveryLoopIfNeeded()
-            await self.requestKeyframeRecovery(reason: "decode-backpressure")
+            await self.requestRecovery(reason: .decodeBackpressure(queueDepth: queueDepth))
         }
     }
 
-    func requestKeyframeRecovery(reason: String) async {
+    func requestKeyframeRecovery(reason: RecoveryReason) async {
         let now = CFAbsoluteTimeGetCurrent()
         if lastRecoveryRequestDispatchTime > 0,
            now - lastRecoveryRequestDispatchTime < Self.recoveryRequestDispatchCooldown {
@@ -74,7 +80,7 @@ extension StreamController {
         trimOverloadWindow(now: now)
         maybeSignalAdaptiveFallback(now: now)
         guard let handler = onKeyframeNeeded else { return }
-        MirageLogger.client("Requesting recovery keyframe (\(reason)) for stream \(streamID)")
+        MirageLogger.client("Requesting recovery keyframe (\(reason.logLabel)) for stream \(streamID)")
         await MainActor.run {
             handler()
         }
@@ -84,6 +90,7 @@ extension StreamController {
         let oldestAllowed = now - Self.overloadWindow
         queueDropTimestamps.removeAll { $0 < oldestAllowed }
         recoveryRequestTimestamps.removeAll { $0 < oldestAllowed }
+        decodeThresholdTimestamps.removeAll { $0 < oldestAllowed }
     }
 
     private func maybeSignalAdaptiveFallback(now: CFAbsoluteTime) {
@@ -91,15 +98,18 @@ extension StreamController {
            now - lastAdaptiveFallbackSignalTime < Self.adaptiveFallbackCooldown {
             return
         }
-        guard queueDropTimestamps.count >= Self.overloadQueueDropThreshold,
-              recoveryRequestTimestamps.count >= Self.overloadRecoveryThreshold else {
+        let queueOverload = queueDropTimestamps.count >= Self.overloadQueueDropThreshold &&
+            recoveryRequestTimestamps.count >= Self.overloadRecoveryThreshold
+        let decodeStorm = decodeThresholdTimestamps.count >= Self.decodeStormThreshold
+        guard queueOverload || decodeStorm else {
             return
         }
         lastAdaptiveFallbackSignalTime = now
         MirageLogger
             .client(
                 "Adaptive fallback trigger: queueDrops=\(queueDropTimestamps.count), " +
-                    "recoveryRequests=\(recoveryRequestTimestamps.count), stream=\(streamID)"
+                    "recoveryRequests=\(recoveryRequestTimestamps.count), " +
+                    "decodeThresholds=\(decodeThresholdTimestamps.count), stream=\(streamID)"
             )
         Task { @MainActor [weak self] in
             await self?.onAdaptiveFallbackNeeded?()
@@ -126,7 +136,7 @@ extension StreamController {
             guard awaitingDuration >= timeout else { continue }
             if lastRecoveryRequestTime > 0, now - lastRecoveryRequestTime < timeout { continue }
             lastRecoveryRequestTime = now
-            await requestKeyframeRecovery(reason: "keyframe-recovery-loop")
+            await requestKeyframeRecovery(reason: .keyframeRecoveryLoop)
         }
         keyframeRecoveryTask = nil
         lastRecoveryRequestTime = 0
@@ -162,6 +172,37 @@ extension StreamController {
         let now = CFAbsoluteTimeGetCurrent()
         let isFrozen = now - lastDecodedFrameTime > Self.freezeTimeout
         updateInputBlocking(isFrozen)
+        if isFrozen { maybeTriggerFreezeRecovery(now: now) }
+        else {
+            consecutiveFreezeRecoveries = 0
+        }
+    }
+
+    private func maybeTriggerFreezeRecovery(now: CFAbsoluteTime) {
+        if lastFreezeRecoveryTime > 0,
+           now - lastFreezeRecoveryTime < Self.freezeRecoveryCooldown {
+            return
+        }
+        lastFreezeRecoveryTime = now
+        consecutiveFreezeRecoveries &+= 1
+
+        let reason: RecoveryReason = .freezeTimeout
+        if consecutiveFreezeRecoveries >= Self.freezeRecoveryEscalationThreshold {
+            MirageLogger.client(
+                "Freeze recovery escalated to full reset after \(consecutiveFreezeRecoveries) attempts for stream \(streamID)"
+            )
+            Task { [weak self] in
+                guard let self else { return }
+                await self.requestRecovery(reason: reason)
+            }
+            return
+        }
+
+        MirageLogger.client("Freeze recovery requesting keyframe for stream \(streamID)")
+        Task { [weak self] in
+            guard let self else { return }
+            await self.requestKeyframeRecovery(reason: reason)
+        }
     }
 
     func setResizeState(_ newState: ResizeState) async {

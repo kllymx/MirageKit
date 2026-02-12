@@ -47,6 +47,9 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
     var onPencilTouchesEnded: ((Set<UITouch>, UIEvent?) -> Void)?
     var onPencilTouchesCancelled: ((Set<UITouch>, UIEvent?) -> Void)?
 
+    /// Callback when a direct non-stylus touch is detected.
+    var onDirectTouchActivity: (() -> Void)?
+
     /// Size of scrollable area - large enough for extended scrolling before recenter
     private let scrollableSize: CGFloat = 100_000
 
@@ -252,7 +255,9 @@ final class ScrollPhysicsCapturingView: UIView, UIScrollViewDelegate, UIGestureR
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard gestureRecognizer == scrollView.panGestureRecognizer || gestureRecognizer == rotationGesture else { return true }
-        return !isStylusLikeTouch(touch, in: self)
+        let isStylus = isStylusLikeTouch(touch, in: self)
+        if touch.type == .direct, !isStylus { onDirectTouchActivity?() }
+        return !isStylus
     }
 
     // MARK: - Trackpad Gesture Handlers

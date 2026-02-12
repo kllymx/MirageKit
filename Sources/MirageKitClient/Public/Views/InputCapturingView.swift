@@ -32,6 +32,9 @@ public class InputCapturingView: UIView {
         }
     }
 
+    /// Callback when a non-stylus direct touch is detected.
+    public var onDirectTouchActivity: (() -> Void)?
+
     /// Callback when drawable metrics change - reports pixel size and scale factor
     public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)? {
         didSet {
@@ -564,6 +567,9 @@ public class InputCapturingView: UIView {
         }
         scrollPhysicsView!.onPencilTouchesCancelled = { [weak self] touches, event in
             self?.handlePencilTouchesCancelled(touches, event: event)
+        }
+        scrollPhysicsView!.onDirectTouchActivity = { [weak self] in
+            self?.onDirectTouchActivity?()
         }
 
         // Enable user interaction

@@ -356,7 +356,7 @@ extension MirageClientService {
     private func startManualApprovalWaitTimer() {
         approvalWaitTask?.cancel()
         approvalWaitTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.5))
+            try? await Task.sleep(for: .seconds(2.5))
             guard let self else { return }
             guard !hasReceivedHelloResponse else { return }
 

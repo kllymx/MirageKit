@@ -186,6 +186,7 @@ public extension MirageClientService {
             }
         )
 
+        await controller.updateDecodeSubmissionLimit(targetFrameRate: getScreenMaxRefreshRate())
         await controller.start()
         await updateReassemblerSnapshot()
 

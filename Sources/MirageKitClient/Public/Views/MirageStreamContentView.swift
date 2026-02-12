@@ -26,6 +26,7 @@ public struct MirageStreamContentView: View {
     public let desktopExitShortcut: MirageClientShortcut
     public let dictationShortcut: MirageClientShortcut
     public let onInputActivity: ((MirageInputEvent) -> Void)?
+    public let onDirectTouchActivity: (() -> Void)?
     public let onHardwareKeyboardPresenceChanged: ((Bool) -> Void)?
     public let onSoftwareKeyboardVisibilityChanged: ((Bool) -> Void)?
     public let dockSnapEnabled: Bool
@@ -76,6 +77,7 @@ public struct MirageStreamContentView: View {
     ///   - desktopExitShortcut: Client shortcut used for desktop stream exit.
     ///   - dictationShortcut: Client shortcut used for dictation toggle.
     ///   - onInputActivity: Optional callback invoked for each locally captured input event.
+    ///   - onDirectTouchActivity: Optional callback invoked when direct finger touch input occurs.
     ///   - onHardwareKeyboardPresenceChanged: Optional handler for hardware keyboard availability.
     ///   - onSoftwareKeyboardVisibilityChanged: Optional handler for software keyboard visibility.
     ///   - dockSnapEnabled: Whether input should snap to the dock edge on iPadOS.
@@ -98,6 +100,7 @@ public struct MirageStreamContentView: View {
         desktopExitShortcut: MirageClientShortcut = .defaultDesktopExit,
         dictationShortcut: MirageClientShortcut = .defaultDictationToggle,
         onInputActivity: ((MirageInputEvent) -> Void)? = nil,
+        onDirectTouchActivity: (() -> Void)? = nil,
         onHardwareKeyboardPresenceChanged: ((Bool) -> Void)? = nil,
         onSoftwareKeyboardVisibilityChanged: ((Bool) -> Void)? = nil,
         dockSnapEnabled: Bool = false,
@@ -121,6 +124,7 @@ public struct MirageStreamContentView: View {
         self.desktopExitShortcut = desktopExitShortcut
         self.dictationShortcut = dictationShortcut
         self.onInputActivity = onInputActivity
+        self.onDirectTouchActivity = onDirectTouchActivity
         self.onHardwareKeyboardPresenceChanged = onHardwareKeyboardPresenceChanged
         self.onSoftwareKeyboardVisibilityChanged = onSoftwareKeyboardVisibilityChanged
         self.dockSnapEnabled = dockSnapEnabled
@@ -159,6 +163,7 @@ public struct MirageStreamContentView: View {
                 },
                 onHardwareKeyboardPresenceChanged: onHardwareKeyboardPresenceChanged,
                 onSoftwareKeyboardVisibilityChanged: onSoftwareKeyboardVisibilityChanged,
+                onDirectTouchActivity: onDirectTouchActivity,
                 dockSnapEnabled: dockSnapEnabled,
                 usesVirtualTrackpad: directTouchInputMode == .dragCursor,
                 directTouchInputMode: directTouchInputMode,
@@ -608,6 +613,16 @@ public struct MirageStreamContentView: View {
             height: min(maxDrawableSize.height, alignedEven(rawTargetSize.height))
         )
 
+        if isDesktopStream {
+            let acknowledgedPixelSize = currentDesktopAcknowledgedPixelSize()
+            if approximatelyEqualPixelSizes(acknowledgedPixelSize, alignedTargetSize) {
+                lastSentEncodedPixelSize = alignedTargetSize
+                streamScaleTask?.cancel()
+                streamScaleTask = nil
+                return
+            }
+        }
+
         guard alignedTargetSize != lastSentEncodedPixelSize else { return }
 
         streamScaleTask?.cancel()
@@ -633,6 +648,17 @@ public struct MirageStreamContentView: View {
         let rounded = CGFloat(Int(value.rounded()))
         let even = rounded - CGFloat(Int(rounded) % 2)
         return max(2, even)
+    }
+
+    private func approximatelyEqualPixelSizes(
+        _ lhs: CGSize,
+        _ rhs: CGSize,
+        tolerance: CGFloat = 2
+    )
+    -> Bool {
+        guard lhs.width > 0, lhs.height > 0, rhs.width > 0, rhs.height > 0 else { return false }
+        return abs(lhs.width - rhs.width) <= tolerance &&
+            abs(lhs.height - rhs.height) <= tolerance
     }
 
     #if os(iOS) || os(visionOS)

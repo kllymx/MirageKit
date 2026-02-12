@@ -18,6 +18,32 @@ import MirageKit
 actor StreamController {
     // MARK: - Types
 
+    enum RecoveryReason: Sendable {
+        case decodeErrorThreshold
+        case decodeBackpressure(queueDepth: Int)
+        case frameLoss
+        case freezeTimeout
+        case keyframeRecoveryLoop
+        case manualRecovery
+
+        var logLabel: String {
+            switch self {
+            case .decodeErrorThreshold:
+                "decode-error-threshold"
+            case let .decodeBackpressure(queueDepth):
+                "decode-backpressure depth=\(queueDepth)"
+            case .frameLoss:
+                "frame-loss"
+            case .freezeTimeout:
+                "freeze-timeout"
+            case .keyframeRecoveryLoop:
+                "keyframe-recovery-loop"
+            case .manualRecovery:
+                "manual-recovery"
+            }
+        }
+    }
+
     /// State of the resize operation
     enum ResizeState: Equatable, Sendable {
         case idle
@@ -82,15 +108,18 @@ actor StreamController {
 
     /// Interval for checking freeze state.
     static let freezeCheckInterval: Duration = .milliseconds(500)
+    static let freezeRecoveryCooldown: CFAbsoluteTime = 3.0
+    static let freezeRecoveryEscalationThreshold: Int = 2
 
-    /// Maximum number of frames buffered for decode before dropping old frames.
-    static let maxQueuedFrames: Int = 6
+    /// Maximum number of frames buffered for decode before triggering full recovery.
+    static let maxQueuedFrames: Int = 10
 
     /// Minimum interval between decode backpressure drop logs.
     static let queueDropLogInterval: CFAbsoluteTime = 1.0
     static let overloadWindow: CFAbsoluteTime = 8.0
     static let overloadQueueDropThreshold: Int = 12
     static let overloadRecoveryThreshold: Int = 2
+    static let decodeStormThreshold: Int = 2
     static let backpressureRecoveryCooldown: CFAbsoluteTime = 1.0
     static let adaptiveFallbackCooldown: CFAbsoluteTime = 15.0
     static let recoveryRequestDispatchCooldown: CFAbsoluteTime = 0.5
@@ -119,6 +148,7 @@ actor StreamController {
     var lastQueueDropLogTime: CFAbsoluteTime = 0
     var queueDropTimestamps: [CFAbsoluteTime] = []
     var recoveryRequestTimestamps: [CFAbsoluteTime] = []
+    var decodeThresholdTimestamps: [CFAbsoluteTime] = []
     var lastRecoveryRequestDispatchTime: CFAbsoluteTime = 0
     var lastBackpressureRecoveryTime: CFAbsoluteTime = 0
     var lastAdaptiveFallbackSignalTime: CFAbsoluteTime = 0
@@ -129,6 +159,8 @@ actor StreamController {
     static let metricsDispatchInterval: Duration = .milliseconds(500)
 
     var lastDecodedFrameTime: CFAbsoluteTime = 0
+    var lastFreezeRecoveryTime: CFAbsoluteTime = 0
+    var consecutiveFreezeRecoveries: Int = 0
     var freezeMonitorTask: Task<Void, Never>?
 
     // MARK: - Callbacks
@@ -192,6 +224,8 @@ actor StreamController {
     /// Start the controller - sets up decoder and reassembler callbacks
     func start() async {
         lastDecodedFrameTime = 0
+        lastFreezeRecoveryTime = 0
+        consecutiveFreezeRecoveries = 0
         lastRecoveryRequestDispatchTime = 0
         stopFreezeMonitor()
 
@@ -199,9 +233,10 @@ actor StreamController {
         await decoder.setErrorThresholdHandler { [weak self] in
             guard let self else { return }
             Task {
+                await self.recordDecodeThresholdEvent()
                 self.reassembler.enterKeyframeOnlyMode()
                 await self.startKeyframeRecoveryLoopIfNeeded()
-                await self.requestKeyframeRecovery(reason: "decode-error-threshold")
+                await self.requestKeyframeRecovery(reason: .decodeErrorThreshold)
             }
         }
 
@@ -248,6 +283,9 @@ actor StreamController {
         finishFrameQueue()
         queueDropsSinceLastLog = 0
         lastQueueDropLogTime = 0
+        decodeThresholdTimestamps.removeAll(keepingCapacity: false)
+        lastFreezeRecoveryTime = 0
+        consecutiveFreezeRecoveries = 0
         metricsTracker.reset()
         lastMetricsLogTime = 0
 
@@ -303,7 +341,7 @@ actor StreamController {
             Task {
                 self.reassembler.enterKeyframeOnlyMode()
                 await self.startKeyframeRecoveryLoopIfNeeded()
-                await self.requestKeyframeRecovery(reason: "frame-loss")
+                await self.requestKeyframeRecovery(reason: .frameLoss)
             }
         }
     }
@@ -322,23 +360,12 @@ actor StreamController {
         }
 
         if queuedFrames.count >= Self.maxQueuedFrames {
-            if frame.isKeyframe {
-                let dropIndex = queuedFrames.lastIndex(where: { !$0.isKeyframe }) ?? queuedFrames.indices.last
-                if let dropIndex {
-                    let droppedFrame = queuedFrames.remove(at: dropIndex)
-                    droppedFrame.releaseBuffer()
-                    recordQueueDrop()
-                }
-            } else {
-                frame.releaseBuffer()
-                recordQueueDrop()
-                maybeTriggerBackpressureRecovery()
-                logQueueDropIfNeeded()
-                return
-            }
-
-            maybeTriggerBackpressureRecovery()
+            let queueDepth = queuedFrames.count
+            frame.releaseBuffer()
+            recordQueueDrop()
+            maybeTriggerBackpressureRecovery(queueDepth: queueDepth)
             logQueueDropIfNeeded()
+            return
         }
 
         queuedFrames.append(frame)

@@ -38,6 +38,7 @@ extension HEVCDecoder {
         cachedFormatDescription = nil
 
         invalidateMemoryPool()
+        resetDecodeSubmissionSlots()
     }
 
     func resetForNewSession() {
@@ -57,10 +58,11 @@ extension HEVCDecoder {
         awaitingDimensionChange = false
         expectedDimensions = nil
 
-        // Reset error tracking
-        errorTracker?.recordSuccess()
+        // Reset error tracking for a clean recovery episode.
+        errorTracker?.clearForSessionReset()
 
         flushMemoryPool()
+        resetDecodeSubmissionSlots()
 
         MirageLogger.decoder("Decoder reset for new session - awaiting fresh keyframe")
     }
@@ -201,6 +203,7 @@ extension HEVCDecoder {
 
         // Decode
         var flags: VTDecodeInfoFlags = []
+        await acquireDecodeSubmissionSlot()
 
         let decodeInfo = DecodeInfo(
             handler: decodedFrameHandler,
@@ -208,6 +211,10 @@ extension HEVCDecoder {
             errorTracker: errorTracker,
             decodeStartTime: CFAbsoluteTimeGetCurrent(),
             performanceTracker: performanceTracker,
+            onCompletion: { [weak self] in
+                guard let self else { return }
+                Task { await self.releaseDecodeSubmissionSlot() }
+            },
             releaseBuffer: nil,
             data: frameData
         )
@@ -235,12 +242,14 @@ extension HEVCDecoder {
                 // Track consecutive errors to detect when we need a fresh keyframe
                 let info = Unmanaged<DecodeInfo>.fromOpaque(opaqueInfo.value).takeRetainedValue()
                 info.errorTracker?.recordError()
+                info.onCompletion?()
                 return
             }
             guard let pixelBuffer = imageBuffer else {
                 MirageLogger.error(.decoder, "Decode callback: no image buffer")
                 let info = Unmanaged<DecodeInfo>.fromOpaque(opaqueInfo.value).takeRetainedValue()
                 info.errorTracker?.recordError()
+                info.onCompletion?()
                 return
             }
 
@@ -254,10 +263,12 @@ extension HEVCDecoder {
             if info.handler != nil { info.handler?(pixelBuffer, presentationTime, info.contentRect) } else {
                 MirageLogger.error(.decoder, "Warning: no frame handler set")
             }
+            info.onCompletion?()
         }
 
         if decodeStatus != noErr {
             Unmanaged<DecodeInfo>.fromOpaque(opaqueInfo.value).release()
+            releaseDecodeSubmissionSlot()
             throw MirageError.decodingError(NSError(domain: NSOSStatusErrorDomain, code: Int(decodeStatus)))
         }
     }

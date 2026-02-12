@@ -37,9 +37,9 @@ struct StreamControllerRecoveryTests {
         for _ in 0 ..< 12 {
             await controller.recordQueueDrop()
         }
-        await controller.requestKeyframeRecovery(reason: "test-1")
+        await controller.requestKeyframeRecovery(reason: .manualRecovery)
         try await Task.sleep(for: .milliseconds(550))
-        await controller.requestKeyframeRecovery(reason: "test-2")
+        await controller.requestKeyframeRecovery(reason: .manualRecovery)
         try await Task.sleep(for: .milliseconds(100))
 
         #expect(keyframeCounter.value == 2)
@@ -60,17 +60,66 @@ struct StreamControllerRecoveryTests {
             onResizeEvent: nil
         )
 
-        await controller.maybeTriggerBackpressureRecovery()
-        await controller.maybeTriggerBackpressureRecovery()
-        try await Task.sleep(for: .milliseconds(150))
+        await controller.maybeTriggerBackpressureRecovery(queueDepth: 6)
+        await controller.maybeTriggerBackpressureRecovery(queueDepth: 6)
+        try await waitUntil("first backpressure keyframe request") {
+            keyframeCounter.value == 1
+        }
         #expect(keyframeCounter.value == 1)
 
         try await Task.sleep(for: .milliseconds(1100))
-        await controller.maybeTriggerBackpressureRecovery()
-        try await Task.sleep(for: .milliseconds(150))
+        await controller.maybeTriggerBackpressureRecovery(queueDepth: 6)
+        try await waitUntil("second backpressure keyframe request") {
+            keyframeCounter.value == 2
+        }
         #expect(keyframeCounter.value == 2)
 
         await controller.stop()
+    }
+
+    @Test("Decode threshold storms trigger adaptive fallback without queue-drop threshold")
+    func decodeThresholdStormTriggersAdaptiveFallback() async throws {
+        let fallbackCounter = LockedCounter()
+        let controller = StreamController(streamID: 3, maxPayloadSize: 1200)
+
+        await controller.setCallbacks(
+            onKeyframeNeeded: nil,
+            onResizeEvent: nil,
+            onResizeStateChanged: nil,
+            onFrameDecoded: nil,
+            onFirstFrame: nil,
+            onInputBlockingChanged: nil,
+            onAdaptiveFallbackNeeded: {
+                fallbackCounter.increment()
+            }
+        )
+
+        await controller.recordDecodeThresholdEvent()
+        try await Task.sleep(for: .milliseconds(50))
+        await controller.recordDecodeThresholdEvent()
+        try await waitUntil("decode threshold fallback trigger") {
+            fallbackCounter.value == 1
+        }
+
+        #expect(fallbackCounter.value == 1)
+
+        await controller.stop()
+    }
+
+    private func waitUntil(
+        _ label: String,
+        timeout: Duration = .seconds(2),
+        pollInterval: Duration = .milliseconds(20),
+        condition: @escaping @Sendable () -> Bool
+    ) async throws {
+        let start = ContinuousClock.now
+        while !condition() {
+            if ContinuousClock.now - start > timeout {
+                Issue.record("Timed out waiting for \(label)")
+                return
+            }
+            try await Task.sleep(for: pollInterval)
+        }
     }
 }
 

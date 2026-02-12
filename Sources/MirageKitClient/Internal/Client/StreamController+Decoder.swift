@@ -43,4 +43,8 @@ extension StreamController {
     func getReassembler() -> FrameReassembler {
         reassembler
     }
+
+    func updateDecodeSubmissionLimit(targetFrameRate: Int) async {
+        await decoder.setDecodeSubmissionLimit(targetFrameRate: targetFrameRate)
+    }
 }

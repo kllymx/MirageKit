@@ -53,6 +53,10 @@ public class MirageMetalView: MTKView {
     private var drawScheduled = false
     private var inFlightDraws: Int = 0
     private var pendingDraw = false
+    private var drawableRetryScheduled = false
+    private var drawableRetryTask: Task<Void, Never>?
+    private var noDrawableSkipsSinceLog: UInt64 = 0
+    private var lastNoDrawableLogTime: CFAbsoluteTime = 0
 
     private var maxInFlightDraws: Int {
         if let metalLayer = layer as? CAMetalLayer {
@@ -100,6 +104,7 @@ public class MirageMetalView: MTKView {
     }
 
     deinit {
+        drawableRetryTask?.cancel()
         let streamID = registeredStreamID
         Task { @MainActor in
             if let streamID { MirageClientRenderTrigger.shared.unregister(streamID: streamID) }
@@ -205,8 +210,14 @@ public class MirageMetalView: MTKView {
 
         if let pixelFormatType = renderState.currentPixelFormatType { updateOutputFormatIfNeeded(pixelFormatType) }
 
-        guard let drawable = currentDrawable,
-              let pixelBuffer = renderState.currentPixelBuffer else {
+        let drawable = currentDrawable
+        let pixelBuffer = renderState.currentPixelBuffer
+        guard let drawable, let pixelBuffer else {
+            if drawable == nil {
+                noDrawableSkipsSinceLog &+= 1
+                maybeLogDrawableStarvation()
+                scheduleDrawableRetry()
+            }
             finishDraw()
             return
         }
@@ -222,13 +233,18 @@ public class MirageMetalView: MTKView {
             contentRect: renderState.currentContentRect,
             outputPixelFormat: colorPixelFormat,
             completion: { [weak self] in
-                self?.finishDraw()
+                Task { @MainActor [weak self] in
+                    self?.finishDraw()
+                }
             }
         )
     }
 
     func suspendRendering() {
         renderingSuspended = true
+        drawableRetryTask?.cancel()
+        drawableRetryTask = nil
+        drawableRetryScheduled = false
     }
 
     func resumeRendering() {
@@ -240,7 +256,7 @@ public class MirageMetalView: MTKView {
     @MainActor
     func requestDraw() {
         guard !renderingSuspended else { return }
-        if drawScheduled || inFlightDraws >= maxInFlightDraws {
+        if drawScheduled || inFlightDraws >= maxInFlightDraws || drawableRetryScheduled {
             pendingDraw = true
             return
         }
@@ -250,7 +266,7 @@ public class MirageMetalView: MTKView {
     @MainActor
     private func finishDraw() {
         inFlightDraws = max(0, inFlightDraws - 1)
-        if pendingDraw, inFlightDraws < maxInFlightDraws {
+        if pendingDraw, inFlightDraws < maxInFlightDraws, !drawableRetryScheduled {
             pendingDraw = false
             scheduleDraw()
         }
@@ -260,6 +276,41 @@ public class MirageMetalView: MTKView {
     private func scheduleDraw() {
         drawScheduled = true
         draw()
+    }
+
+    @MainActor
+    private func scheduleDrawableRetry() {
+        guard !drawableRetryScheduled else { return }
+        drawableRetryScheduled = true
+        drawableRetryTask?.cancel()
+        drawableRetryTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(4))
+            } catch {
+                return
+            }
+            guard let self else { return }
+            drawableRetryScheduled = false
+            if pendingDraw || !renderingSuspended {
+                pendingDraw = false
+                requestDraw()
+            }
+        }
+    }
+
+    private func maybeLogDrawableStarvation(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) {
+        guard MirageLogger.isEnabled(.renderer) else { return }
+        if lastNoDrawableLogTime == 0 {
+            lastNoDrawableLogTime = now
+            return
+        }
+        guard now - lastNoDrawableLogTime >= 1.0 else { return }
+        let elapsedText = (now - lastNoDrawableLogTime).formatted(.number.precision(.fractionLength(1)))
+        MirageLogger.renderer(
+            "Drawable unavailable on macOS view; retries=\(noDrawableSkipsSinceLog) in last \(elapsedText)s"
+        )
+        noDrawableSkipsSinceLog = 0
+        lastNoDrawableLogTime = now
     }
 
     private func updateOutputFormatIfNeeded(_ pixelFormatType: OSType) {

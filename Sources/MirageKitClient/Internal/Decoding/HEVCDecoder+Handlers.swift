@@ -54,6 +54,6 @@ extension HEVCDecoder {
             expectedDimensions = nil
         }
         // Reset error tracking to give fresh keyframe a clean slate
-        errorTracker?.recordSuccess()
+        errorTracker?.clearForSessionReset()
     }
 }

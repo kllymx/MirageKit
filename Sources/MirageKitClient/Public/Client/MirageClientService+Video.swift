@@ -312,7 +312,7 @@ extension MirageClientService {
 
         Task { [weak self] in
             guard let self else { return }
-            await controllersByStream[streamID]?.requestRecovery()
+            await controllersByStream[streamID]?.requestRecovery(reason: .manualRecovery)
 
             do {
                 if udpConnection == nil { try await startVideoConnection() }

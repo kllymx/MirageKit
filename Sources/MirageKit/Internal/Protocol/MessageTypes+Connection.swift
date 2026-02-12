@@ -79,6 +79,8 @@ package struct HelloResponseMessage: Codable {
     package let mediaEncryptionEnabled: Bool
     /// Auth token required for UDP registration packets.
     package let udpRegistrationToken: Data
+    /// True when the host trust provider auto-granted this connection.
+    package let autoTrustGranted: Bool?
     /// Signed host identity envelope.
     package let identity: MirageIdentityEnvelope
 
@@ -92,6 +94,7 @@ package struct HelloResponseMessage: Codable {
         requestNonce: String,
         mediaEncryptionEnabled: Bool,
         udpRegistrationToken: Data,
+        autoTrustGranted: Bool? = nil,
         identity: MirageIdentityEnvelope
     ) {
         self.accepted = accepted
@@ -103,6 +106,7 @@ package struct HelloResponseMessage: Codable {
         self.requestNonce = requestNonce
         self.mediaEncryptionEnabled = mediaEncryptionEnabled
         self.udpRegistrationToken = udpRegistrationToken
+        self.autoTrustGranted = autoTrustGranted
         self.identity = identity
     }
 }
