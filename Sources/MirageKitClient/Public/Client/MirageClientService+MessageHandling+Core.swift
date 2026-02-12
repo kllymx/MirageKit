@@ -126,15 +126,16 @@ extension MirageClientService {
             approvalWaitTask?.cancel()
             if response.accepted {
                 if response.autoTrustGranted == true {
-                    let noticeKey = "com.mirage.autotrust.client.\(response.hostID.uuidString.lowercased()).\(identity.keyID)"
+                    let noticeHostID = connectedHost?.id ?? response.hostID
+                    let noticeKey = "com.mirage.autotrust.client.\(noticeHostID.uuidString.lowercased()).\(identity.keyID)"
                     if !UserDefaults.standard.bool(forKey: noticeKey) {
                         UserDefaults.standard.set(true, forKey: noticeKey)
                         let hostDisplayName = response.hostName
                             .trimmingCharacters(in: .whitespacesAndNewlines)
                         if hostDisplayName.isEmpty {
-                            onAutoTrustNotice?("Auto-approved trusted iCloud identity for this host.")
+                            onAutoTrustNotice?("Auto-approved trusted device for this host.")
                         } else {
-                            onAutoTrustNotice?("Auto-approved trusted iCloud identity for \(hostDisplayName).")
+                            onAutoTrustNotice?("Auto-approved trusted device for \(hostDisplayName).")
                         }
                     }
                 }

@@ -4,7 +4,7 @@
 //
 //  Created by Ethan Lipnik on 2/5/26.
 //
-//  CADisplayLink-gated render scheduler for decode-accurate presentation.
+//  Display-link-gated render scheduler for decode-accurate presentation.
 //
 
 import Foundation
@@ -12,15 +12,17 @@ import MirageKit
 
 #if os(iOS) || os(visionOS)
 import QuartzCore
+#endif
+
+#if os(macOS)
+import CoreVideo
+#endif
 
 @MainActor
 final class MirageRenderScheduler {
     private weak var view: MirageMetalView?
-    private var displayLink: CADisplayLink?
     private var targetFPS: Int = 60
 
-    private var pendingSequence: UInt64 = 0
-    private var pendingDecodeTime: CFAbsoluteTime = 0
     private var presentedSequence: UInt64 = 0
     private var lastPresentedDecodeTime: CFAbsoluteTime = 0
     private var decodedCount: UInt64 = 0
@@ -28,22 +30,71 @@ final class MirageRenderScheduler {
     private var tickCount: UInt64 = 0
     private var lastLogTime: CFAbsoluteTime = 0
     private var redrawPending = false
+    private var lastDecodedSequence: UInt64 = 0
+
+    #if os(iOS) || os(visionOS)
+    private var displayLink: CADisplayLink?
+    #endif
+
+    #if os(macOS)
+    private var displayLink: CVDisplayLink?
+    private var lastMacTickTime: CFAbsoluteTime = 0
+    #endif
 
     init(view: MirageMetalView) {
         self.view = view
     }
 
     func start() {
+        #if os(iOS) || os(visionOS)
         guard displayLink == nil else { return }
-        let link = CADisplayLink(target: self, selector: #selector(handleTick))
-        link.add(to: .main, forMode: .common)
+        let link = CADisplayLink(target: self, selector: #selector(handleDisplayLinkTick))
+        link.add(to: RunLoop.main, forMode: RunLoop.Mode.common)
         displayLink = link
         applyTargetFPS()
+        #elseif os(macOS)
+        guard displayLink == nil else { return }
+        var link: CVDisplayLink?
+        guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess,
+              let link else {
+            MirageLogger.error(.renderer, "Failed to create CVDisplayLink")
+            return
+        }
+
+        let callback: CVDisplayLinkOutputCallback = { _, _, _, _, _, userInfo in
+            guard let userInfo else { return kCVReturnError }
+            let scheduler = Unmanaged<MirageRenderScheduler>.fromOpaque(userInfo).takeUnretainedValue()
+            scheduler.handleMacDisplayLinkTick()
+            return kCVReturnSuccess
+        }
+
+        guard CVDisplayLinkSetOutputCallback(
+            link,
+            callback,
+            Unmanaged.passUnretained(self).toOpaque()
+        ) == kCVReturnSuccess else {
+            MirageLogger.error(.renderer, "Failed to configure CVDisplayLink callback")
+            return
+        }
+
+        displayLink = link
+        if CVDisplayLinkStart(link) != kCVReturnSuccess {
+            MirageLogger.error(.renderer, "Failed to start CVDisplayLink")
+            displayLink = nil
+        }
+        #endif
     }
 
     func stop() {
+        #if os(iOS) || os(visionOS)
         displayLink?.invalidate()
         displayLink = nil
+        #elseif os(macOS)
+        if let displayLink {
+            CVDisplayLinkStop(displayLink)
+            self.displayLink = nil
+        }
+        #endif
     }
 
     func updateTargetFPS(_ fps: Int) {
@@ -52,8 +103,6 @@ final class MirageRenderScheduler {
     }
 
     func reset() {
-        pendingSequence = 0
-        pendingDecodeTime = 0
         presentedSequence = 0
         lastPresentedDecodeTime = 0
         decodedCount = 0
@@ -61,13 +110,14 @@ final class MirageRenderScheduler {
         tickCount = 0
         lastLogTime = 0
         redrawPending = false
-    }
-
-    func notePending(sequence: UInt64, decodeTime: CFAbsoluteTime) {
-        guard sequence > pendingSequence else { return }
-        decodedCount &+= 1
-        pendingSequence = sequence
-        pendingDecodeTime = decodeTime
+        #if os(macOS)
+        lastMacTickTime = 0
+        #endif
+        if let streamID = view?.streamID {
+            lastDecodedSequence = MirageFrameCache.shared.latestSequence(for: streamID)
+        } else {
+            lastDecodedSequence = 0
+        }
     }
 
     func notePresented(sequence: UInt64, decodeTime: CFAbsoluteTime) {
@@ -81,14 +131,9 @@ final class MirageRenderScheduler {
         redrawPending = true
     }
 
-    @objc private func handleTick() {
-        let now = CFAbsoluteTimeGetCurrent()
-        tickCount &+= 1
-        if let view, pendingSequence > presentedSequence || redrawPending {
-            redrawPending = false
-            view.renderSchedulerTick()
-        }
-        logIfNeeded(now: now)
+    #if os(iOS) || os(visionOS)
+    @objc private func handleDisplayLinkTick() {
+        processTick(now: CFAbsoluteTimeGetCurrent())
     }
 
     private func applyTargetFPS() {
@@ -99,6 +144,51 @@ final class MirageRenderScheduler {
             maximum: fps,
             preferred: fps
         )
+    }
+    #endif
+
+    #if os(macOS)
+    private func applyTargetFPS() {}
+
+    private nonisolated func handleMacDisplayLinkTick() {
+        Task { @MainActor [weak self] in
+            self?.handleMacTickOnMain()
+        }
+    }
+
+    private func handleMacTickOnMain() {
+        let now = CFAbsoluteTimeGetCurrent()
+        let minInterval = 1.0 / Double(max(1, targetFPS))
+        if lastMacTickTime > 0, now - lastMacTickTime < minInterval {
+            return
+        }
+        lastMacTickTime = now
+        processTick(now: now)
+    }
+    #endif
+
+    private func processTick(now: CFAbsoluteTime) {
+        tickCount &+= 1
+
+        if let view {
+            if let streamID = view.streamID {
+                let latestSequence = MirageFrameCache.shared.latestSequence(for: streamID)
+                if latestSequence > lastDecodedSequence {
+                    decodedCount &+= latestSequence &- lastDecodedSequence
+                    lastDecodedSequence = latestSequence
+                }
+
+                if redrawPending || MirageFrameCache.shared.queueDepth(for: streamID) > 0 {
+                    redrawPending = false
+                    view.renderSchedulerTick()
+                }
+            } else if redrawPending {
+                redrawPending = false
+                view.renderSchedulerTick()
+            }
+        }
+
+        logIfNeeded(now: now)
     }
 
     private func logIfNeeded(now: CFAbsoluteTime) {
@@ -116,16 +206,26 @@ final class MirageRenderScheduler {
         let tickFPS = Double(tickCount) / elapsed
         let decodedFPS = Double(decodedCount) / elapsed
         let presentedFPS = Double(presentedCount) / elapsed
-        let ageMs = lastPresentedDecodeTime > 0 ? (now - lastPresentedDecodeTime) * 1000 : 0
+        let presentAgeMs = lastPresentedDecodeTime > 0 ? (now - lastPresentedDecodeTime) * 1000 : 0
+
+        var queueDepth = 0
+        var oldestAgeMs: Double = 0
+        if let streamID = view?.streamID {
+            queueDepth = MirageFrameCache.shared.queueDepth(for: streamID)
+            oldestAgeMs = MirageFrameCache.shared.oldestAgeMs(for: streamID)
+        }
 
         let tickText = tickFPS.formatted(.number.precision(.fractionLength(1)))
         let decodedText = decodedFPS.formatted(.number.precision(.fractionLength(1)))
         let presentedText = presentedFPS.formatted(.number.precision(.fractionLength(1)))
-        let ageText = ageMs.formatted(.number.precision(.fractionLength(1)))
+        let presentAgeText = presentAgeMs.formatted(.number.precision(.fractionLength(1)))
+        let oldestAgeText = oldestAgeMs.formatted(.number.precision(.fractionLength(1)))
 
-        MirageLogger.renderer(
-            "Render sync: ticks=\(tickText)fps decoded=\(decodedText)fps presented=\(presentedText)fps age=\(ageText)ms"
-        )
+        MirageLogger
+            .renderer(
+                "Render sync: ticks=\(tickText)fps decoded=\(decodedText)fps presented=\(presentedText)fps " +
+                    "queueDepth=\(queueDepth) oldest=\(oldestAgeText)ms age=\(presentAgeText)ms"
+            )
 
         decodedCount = 0
         presentedCount = 0
@@ -133,4 +233,3 @@ final class MirageRenderScheduler {
         lastLogTime = now
     }
 }
-#endif

@@ -81,6 +81,8 @@ public final class MirageClientService {
     /// Enables automatic stream fallback when decode overload persists.
     public var adaptiveFallbackEnabled: Bool = true
     public var adaptiveFallbackMode: AdaptiveFallbackMode = .automatic
+    /// Policy lock for decode-storm signaling without automatic quality mutation.
+    let adaptiveFallbackMutationsEnabled: Bool = false
 
     /// Optional refresh rate override sent to the host.
     public var maxRefreshRateOverride: Int?

@@ -359,6 +359,10 @@ extension MirageClientService {
             MirageLogger.client("Adaptive fallback skipped (disabled) for stream \(streamID)")
             return
         }
+        guard adaptiveFallbackMutationsEnabled else {
+            MirageLogger.client("Adaptive fallback signal-only mode active (no encoder mutation) for stream \(streamID)")
+            return
+        }
 
         switch adaptiveFallbackMode {
         case .disabled:
@@ -469,6 +473,7 @@ extension MirageClientService {
     }
 
     func updateAdaptiveFallbackRecovery(streamID: StreamID, targetFrameRate: Int) {
+        guard adaptiveFallbackMutationsEnabled else { return }
         guard adaptiveFallbackEnabled, adaptiveFallbackMode == .customTemporary else { return }
 
         let baselineFormat = adaptiveFallbackBaselineFormatByStream[streamID]

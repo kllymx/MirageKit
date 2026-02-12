@@ -8,6 +8,7 @@
 //
 
 @testable import MirageKitClient
+import CoreVideo
 import Foundation
 import Testing
 
@@ -106,6 +107,57 @@ struct StreamControllerRecoveryTests {
         await controller.stop()
     }
 
+    @Test("Present-stall freeze recovery triggers keyframe and escalates on repeated stalls")
+    func presentStallFreezeRecoveryEscalates() async throws {
+        let streamID: StreamID = 4
+        let keyframeCounter = LockedCounter()
+        let controller = StreamController(streamID: streamID, maxPayloadSize: 1200)
+        MirageFrameCache.shared.clear(for: streamID)
+
+        await controller.setCallbacks(
+            onKeyframeNeeded: {
+                keyframeCounter.increment()
+            },
+            onResizeEvent: nil,
+            onResizeStateChanged: nil,
+            onFrameDecoded: nil,
+            onFirstFrame: nil,
+            onInputBlockingChanged: nil,
+            onAdaptiveFallbackNeeded: nil
+        )
+
+        let pixelBuffer = makePixelBuffer()
+        _ = MirageFrameCache.shared.enqueue(
+            pixelBuffer,
+            contentRect: .zero,
+            decodeTime: CFAbsoluteTimeGetCurrent() - 10,
+            metalTexture: nil,
+            texture: nil,
+            for: streamID
+        )
+
+        await controller.recordDecodedFrame()
+
+        try await waitUntil(
+            "freeze keyframe recovery trigger",
+            timeout: .seconds(8)
+        ) {
+            keyframeCounter.value >= 1
+        }
+
+        try await waitUntil(
+            "freeze recovery escalation",
+            timeout: .seconds(6)
+        ) {
+            keyframeCounter.value >= 2
+        }
+
+        #expect(keyframeCounter.value >= 2)
+
+        await controller.stop()
+        MirageFrameCache.shared.clear(for: streamID)
+    }
+
     private func waitUntil(
         _ label: String,
         timeout: Duration = .seconds(2),
@@ -120,6 +172,24 @@ struct StreamControllerRecoveryTests {
             }
             try await Task.sleep(for: pollInterval)
         }
+    }
+
+    private func makePixelBuffer() -> CVPixelBuffer {
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            8,
+            8,
+            kCVPixelFormatType_32BGRA,
+            nil,
+            &buffer
+        )
+        #expect(status == kCVReturnSuccess)
+        guard let buffer else {
+            Issue.record("Failed to create CVPixelBuffer")
+            fatalError("Failed to create CVPixelBuffer")
+        }
+        return buffer
     }
 }
 

@@ -329,6 +329,7 @@ public final class MirageHostService {
             "Hardware metadata model=\(hardwareModelIdentifier ?? "nil") icon=\(hardwareIconName ?? "nil") family=\(hardwareMachineFamily ?? "nil") color=\(hardwareColorCode?.description ?? "nil")"
         )
         advertisedCapabilities = capabilities
+        hostID = capabilities.deviceID ?? UUID()
 
         advertiser = BonjourAdvertiser(
             serviceName: name,

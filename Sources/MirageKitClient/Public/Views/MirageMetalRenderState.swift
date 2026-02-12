@@ -11,7 +11,6 @@ import Foundation
 import MirageKit
 
 final class MirageMetalRenderState {
-    private var lastRenderedSequence: UInt64 = 0
     private var needsRedraw = true
 
     private(set) var currentPixelBuffer: CVPixelBuffer?
@@ -21,7 +20,6 @@ final class MirageMetalRenderState {
     private(set) var currentDecodeTime: CFAbsoluteTime = 0
 
     func reset() {
-        lastRenderedSequence = 0
         needsRedraw = true
         currentPixelBuffer = nil
         currentContentRect = .zero
@@ -36,19 +34,17 @@ final class MirageMetalRenderState {
 
     @discardableResult
     func updateFrameIfNeeded(streamID: StreamID?) -> Bool {
-        guard let id = streamID, let entry = MirageFrameCache.shared.getEntry(for: id) else { return false }
-        let hasNewFrame = entry.sequence != lastRenderedSequence
-        guard hasNewFrame || needsRedraw else { return false }
-
-        if hasNewFrame {
+        if let id = streamID, let entry = MirageFrameCache.shared.dequeue(for: id) {
             currentPixelBuffer = entry.pixelBuffer
             currentPixelFormatType = CVPixelBufferGetPixelFormatType(entry.pixelBuffer)
             currentContentRect = entry.contentRect
-            lastRenderedSequence = entry.sequence
             currentSequence = entry.sequence
             currentDecodeTime = entry.decodeTime
+            needsRedraw = false
+            return true
         }
 
+        guard needsRedraw else { return false }
         needsRedraw = false
         return currentPixelBuffer != nil
     }

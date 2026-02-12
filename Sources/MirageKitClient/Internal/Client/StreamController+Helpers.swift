@@ -24,9 +24,7 @@ extension StreamController {
 
     func recordDecodedFrame() {
         lastDecodedFrameTime = CFAbsoluteTimeGetCurrent()
-        consecutiveFreezeRecoveries = 0
         startFreezeMonitorIfNeeded()
-        if isInputBlocked { updateInputBlocking(false) }
     }
 
     /// Update input blocking state and notify callback
@@ -170,7 +168,23 @@ extension StreamController {
     private func evaluateFreezeState() {
         guard lastDecodedFrameTime > 0 else { return }
         let now = CFAbsoluteTimeGetCurrent()
-        let isFrozen = now - lastDecodedFrameTime > Self.freezeTimeout
+        let presentationSnapshot = MirageFrameCache.shared.presentationSnapshot(for: streamID)
+        if presentationSnapshot.sequence > lastPresentedSequenceObserved {
+            lastPresentedSequenceObserved = presentationSnapshot.sequence
+            lastPresentedProgressTime = now
+            consecutiveFreezeRecoveries = 0
+            if isInputBlocked { updateInputBlocking(false) }
+            return
+        }
+
+        if lastPresentedProgressTime == 0 {
+            lastPresentedProgressTime = presentationSnapshot.presentedTime > 0 ? presentationSnapshot.presentedTime : now
+            return
+        }
+
+        let pendingDepth = MirageFrameCache.shared.queueDepth(for: streamID)
+        let stalledPresentation = now - lastPresentedProgressTime > Self.freezeTimeout
+        let isFrozen = stalledPresentation && pendingDepth > 0
         updateInputBlocking(isFrozen)
         if isFrozen { maybeTriggerFreezeRecovery(now: now) }
         else {

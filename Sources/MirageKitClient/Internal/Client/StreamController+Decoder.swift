@@ -22,6 +22,8 @@ extension StreamController {
         metricsTracker.reset()
         lastMetricsLogTime = 0
         lastDecodedFrameTime = 0
+        lastPresentedSequenceObserved = 0
+        lastPresentedProgressTime = 0
         stopFreezeMonitor()
         await startFrameProcessingPipeline()
     }

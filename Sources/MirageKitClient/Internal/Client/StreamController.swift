@@ -159,6 +159,8 @@ actor StreamController {
     static let metricsDispatchInterval: Duration = .milliseconds(500)
 
     var lastDecodedFrameTime: CFAbsoluteTime = 0
+    var lastPresentedSequenceObserved: UInt64 = 0
+    var lastPresentedProgressTime: CFAbsoluteTime = 0
     var lastFreezeRecoveryTime: CFAbsoluteTime = 0
     var consecutiveFreezeRecoveries: Int = 0
     var freezeMonitorTask: Task<Void, Never>?
@@ -224,10 +226,15 @@ actor StreamController {
     /// Start the controller - sets up decoder and reassembler callbacks
     func start() async {
         lastDecodedFrameTime = 0
+        lastPresentedSequenceObserved = 0
+        lastPresentedProgressTime = 0
         lastFreezeRecoveryTime = 0
         consecutiveFreezeRecoveries = 0
         lastRecoveryRequestDispatchTime = 0
         stopFreezeMonitor()
+        let presentationSnapshot = MirageFrameCache.shared.presentationSnapshot(for: streamID)
+        lastPresentedSequenceObserved = presentationSnapshot.sequence
+        lastPresentedProgressTime = presentationSnapshot.presentedTime
 
         // Set up error recovery - request keyframe when decode errors exceed threshold
         await decoder.setErrorThresholdHandler { [weak self] in
@@ -263,7 +270,6 @@ actor StreamController {
                 texture: nil,
                 for: capturedStreamID
             )
-            MirageClientRenderTrigger.shared.requestDraw(for: capturedStreamID)
 
             if metricsTracker.recordDecodedFrame() {
                 Task { [weak self] in
@@ -284,6 +290,8 @@ actor StreamController {
         queueDropsSinceLastLog = 0
         lastQueueDropLogTime = 0
         decodeThresholdTimestamps.removeAll(keepingCapacity: false)
+        lastPresentedSequenceObserved = 0
+        lastPresentedProgressTime = 0
         lastFreezeRecoveryTime = 0
         consecutiveFreezeRecoveries = 0
         metricsTracker.reset()

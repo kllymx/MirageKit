@@ -7,7 +7,7 @@ MirageKit is the Swift Package that implements the core streaming framework for 
 - MirageKit license: PolyForm Shield 1.0.0 with the line-of-business notice for dedicated remote window/desktop/secondary display/drawing-tablet streaming.
 - Stream scale: client-provided scale derived from the app's resolution limit; encoder overrides define bitrate targets.
 - Hello handshake includes typed protocol negotiation with feature selection (`MirageProtocolNegotiation`, `MirageFeatureSet`).
-- ProMotion preference: refresh override based on MTKView cadence, 120 when supported and enabled, otherwise 60.
+- ProMotion preference: refresh override based on CAMetalLayer display-link cadence, 120 when supported and enabled, otherwise 60.
 - Backpressure: queue-based frame drops.
 - Encoder quality: derived from target bitrate and output resolution; QP bounds mapping when supported.
 - Bitrate-derived quality mapping biases low-bitrate streams toward stronger compression, and queue-pressure quality drops accelerate for bitrate-constrained streams.
@@ -156,6 +156,10 @@ Docs: `If-Your-Computer-Feels-Stuttery.md` - ColorSync stutter cleanup commands.
 - Adaptive fallback triggers on decode-storm episodes (two decode-threshold events within an 8-second window) in addition to queue-drop overload signals.
 - Client decode submission in-flight limits are frame-rate aware (60Hz: 2, 120Hz: 3) to bound asynchronous VideoToolbox submission pressure.
 - Client freeze monitoring requests a recovery keyframe after sustained decode stalls and escalates to full stream recovery on repeated stall windows.
+- Client presentation uses custom CAMetalLayer surfaces on iOS, visionOS, and macOS with display-link driven dequeue/present cadence.
+- MirageFrameCache stores bounded per-stream FIFO frame queues with sequence/age metadata for ordered presentation.
+- Render emergency trimming drops oldest queued frames only during sustained backlog conditions and restores queue depth to a safe floor.
+- Adaptive fallback overload handling remains signal-only; automatic bitrate and pixel-format mutation is not applied by client fallback triggers.
 
 ## Input Handling
 - Host input clears stuck modifiers after 0.5s of modifier inactivity.

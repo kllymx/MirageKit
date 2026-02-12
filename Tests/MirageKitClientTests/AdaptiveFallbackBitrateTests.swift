@@ -62,5 +62,24 @@ struct AdaptiveFallbackBitrateTests {
         #expect(service.adaptiveFallbackBitrateByStream[streamID] == 20_000_000)
         #expect(service.adaptiveFallbackLastAppliedTime[streamID] == 0)
     }
+
+    @Test("Signal-only adaptive fallback policy does not mutate encoder settings")
+    @MainActor
+    func signalOnlyPolicySkipsMutation() async throws {
+        let service = MirageClientService(deviceName: "Unit Test")
+        let streamID: StreamID = 43
+        service.adaptiveFallbackEnabled = true
+        service.adaptiveFallbackMode = .automatic
+        service.adaptiveFallbackBitrateByStream[streamID] = 20_000_000
+        service.adaptiveFallbackCurrentFormatByStream[streamID] = .p010
+        service.adaptiveFallbackLastAppliedTime[streamID] = 0
+
+        service.handleAdaptiveFallbackTrigger(for: streamID)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(service.adaptiveFallbackBitrateByStream[streamID] == 20_000_000)
+        #expect(service.adaptiveFallbackCurrentFormatByStream[streamID] == .p010)
+        #expect(service.adaptiveFallbackLastAppliedTime[streamID] == 0)
+    }
 }
 #endif

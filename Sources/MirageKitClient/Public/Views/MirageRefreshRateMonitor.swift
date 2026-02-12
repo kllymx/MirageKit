@@ -4,17 +4,16 @@
 //
 //  Created by Ethan Lipnik on 1/24/26.
 //
-//  MTKView refresh rate sampler for ProMotion overrides.
+//  Metal view refresh rate sampler for ProMotion overrides.
 //
 
 import MirageKit
 #if os(iOS) || os(visionOS)
-import MetalKit
 import QuartzCore
 
 @MainActor
 final class MirageRefreshRateMonitor: NSObject {
-    private weak var view: MTKView?
+    private weak var view: MirageMetalView?
 
     var onOverrideChange: ((Int) -> Void)?
 
@@ -36,7 +35,7 @@ final class MirageRefreshRateMonitor: NSObject {
         return view.superview != nil && !view.bounds.isEmpty
     }
 
-    init(view: MTKView) {
+    init(view: MirageMetalView) {
         self.view = view
     }
 

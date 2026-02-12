@@ -9,31 +9,26 @@ import MirageKit
 #if os(macOS)
 import AppKit
 import CoreVideo
-import MetalKit
+import Metal
+import QuartzCore
 
-/// Metal-backed view for displaying streamed content on macOS
-public class MirageMetalView: MTKView {
-    private var renderer: MetalRenderer?
-    private let renderState = MirageMetalRenderState()
-
-    /// Stream ID for direct frame cache access (gesture tracking support)
+/// CAMetalLayer-backed view for displaying streamed content on macOS.
+public class MirageMetalView: NSView {
+    /// Stream ID used to read from the shared frame cache.
     var streamID: StreamID? {
         didSet {
+            guard streamID != oldValue else { return }
             renderState.reset()
-            drawScheduled = false
-            inFlightDraws = 0
-            pendingDraw = false
-            let previousID = registeredStreamID
-            if let previousID, previousID != streamID { MirageClientRenderTrigger.shared.unregister(streamID: previousID) }
-            registeredStreamID = streamID
-            if let streamID {
-                MirageClientRenderTrigger.shared.register(view: self, for: streamID)
-                requestDraw()
-            }
+            renderScheduler.reset()
+            inFlightRenders = 0
+            drawableRetryTask?.cancel()
+            drawableRetryTask = nil
+            drawableRetryScheduled = false
+            requestDraw()
         }
     }
 
-    /// Callback when drawable metrics change - reports pixel size and scale factor
+    /// Callback when drawable metrics change - reports pixel size and scale factor.
     public var onDrawableMetricsChanged: ((MirageDrawableMetrics) -> Void)?
 
     /// Optional cap for drawable pixel dimensions.
@@ -46,40 +41,73 @@ public class MirageMetalView: MTKView {
         }
     }
 
-    /// Last reported drawable size to avoid redundant callbacks
-    private var lastReportedDrawableSize: CGSize = .zero
-    private var registeredStreamID: StreamID?
+    private var renderer: MetalRenderer?
+    private let renderState = MirageMetalRenderState()
+    private lazy var renderScheduler = MirageRenderScheduler(view: self)
+
+    private let renderQueue = DispatchQueue(label: "com.mirage.client.render.macos", qos: .userInteractive)
+
     private var renderingSuspended = false
-    private var drawScheduled = false
-    private var inFlightDraws: Int = 0
-    private var pendingDraw = false
+    private var inFlightRenders: Int = 0
+    private var colorPixelFormat: MTLPixelFormat = .bgr10a2Unorm
+
     private var drawableRetryScheduled = false
     private var drawableRetryTask: Task<Void, Never>?
     private var noDrawableSkipsSinceLog: UInt64 = 0
     private var lastNoDrawableLogTime: CFAbsoluteTime = 0
 
-    private var maxInFlightDraws: Int {
-        if let metalLayer = layer as? CAMetalLayer {
-            return max(1, min(2, metalLayer.maximumDrawableCount - 1))
-        }
-        return 1
-    }
+    private var drawStatsStartTime: CFAbsoluteTime = 0
+    private var drawStatsCount: UInt64 = 0
+    private var drawStatsSignalDelayTotal: CFAbsoluteTime = 0
+    private var drawStatsSignalDelayMax: CFAbsoluteTime = 0
+    private var drawStatsDrawableWaitTotal: CFAbsoluteTime = 0
+    private var drawStatsDrawableWaitMax: CFAbsoluteTime = 0
+    private var drawStatsRenderLatencyTotal: CFAbsoluteTime = 0
+    private var drawStatsRenderLatencyMax: CFAbsoluteTime = 0
+
+    private var renderDiagnostics = RenderDiagnostics()
+    private var lastScheduledSignalTime: CFAbsoluteTime = 0
+
+    /// Last reported drawable size to avoid redundant callbacks.
+    private var lastReportedDrawableSize: CGSize = .zero
 
     private static let maxDrawableWidth: CGFloat = 5120
     private static let maxDrawableHeight: CGFloat = 2880
 
-    override public init(frame: CGRect, device: MTLDevice?) {
-        super.init(frame: frame, device: device ?? MTLCreateSystemDefaultDevice())
+    private var maxInFlightDraws: Int {
+        max(1, min(2, metalLayer.maximumDrawableCount - 1))
+    }
+
+    private var metalLayer: CAMetalLayer {
+        if let layer = layer as? CAMetalLayer {
+            return layer
+        }
+        fatalError("MirageMetalView requires CAMetalLayer backing")
+    }
+
+    override public init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
         setup()
     }
 
-    required init(coder: NSCoder) {
+    public convenience init(frame frameRect: NSRect, device _: MTLDevice?) {
+        self.init(frame: frameRect)
+    }
+
+    required init?(coder: NSCoder) {
         super.init(coder: coder)
         setup()
     }
 
     private func setup() {
-        guard let device else { return }
+        wantsLayer = true
+        let metalLayer = CAMetalLayer()
+        layer = metalLayer
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            MirageLogger.error(.renderer, "Failed to create Metal device")
+            return
+        }
 
         do {
             renderer = try MetalRenderer(device: device)
@@ -87,157 +115,51 @@ public class MirageMetalView: MTKView {
             MirageLogger.error(.renderer, "Failed to create renderer: \(error)")
         }
 
-        // Configure for low latency
-        isPaused = true
-        enableSetNeedsDisplay = false
-        framebufferOnly = true
+        metalLayer.device = device
+        metalLayer.framebufferOnly = true
+        metalLayer.pixelFormat = colorPixelFormat
+        metalLayer.colorspace = CGColorSpace(name: CGColorSpace.displayP3)
+        metalLayer.allowsNextDrawableTimeout = true
+        metalLayer.maximumDrawableCount = 3
+        metalLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+    }
 
-        // P3 color space with 10-bit color for wide color gamut
-        colorspace = CGColorSpace(name: CGColorSpace.displayP3)
-        colorPixelFormat = .bgr10a2Unorm
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            renderScheduler.start()
+            resumeRendering()
+            requestDraw()
+        } else {
+            renderScheduler.stop()
+            suspendRendering()
+        }
     }
 
     override public func layout() {
         super.layout()
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let metalLayer = self.metalLayer
+        metalLayer.frame = bounds
+        if metalLayer.contentsScale != scale {
+            metalLayer.contentsScale = scale
+        }
+
+        if bounds.width > 0, bounds.height > 0 {
+            let rawDrawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+            let cappedSize = cappedDrawableSize(rawDrawableSize)
+            if metalLayer.drawableSize != cappedSize {
+                metalLayer.drawableSize = cappedSize
+                renderState.markNeedsRedraw()
+            }
+        }
+
         reportDrawableMetricsIfChanged()
         requestDraw()
     }
 
     deinit {
         drawableRetryTask?.cancel()
-        let streamID = registeredStreamID
-        Task { @MainActor in
-            if let streamID { MirageClientRenderTrigger.shared.unregister(streamID: streamID) }
-        }
-    }
-
-    /// Report actual drawable pixel size to ensure host captures at correct resolution
-    private func reportDrawableMetricsIfChanged() {
-        let scale = window?.backingScaleFactor ?? 2.0
-        let rawDrawableSize = CGSize(
-            width: bounds.width * scale,
-            height: bounds.height * scale
-        )
-        let cappedDrawableSize = cappedDrawableSize(rawDrawableSize)
-        if cappedDrawableSize != rawDrawableSize { drawableSize = cappedDrawableSize }
-        if cappedDrawableSize != lastReportedDrawableSize, cappedDrawableSize.width > 0, cappedDrawableSize.height > 0 {
-            lastReportedDrawableSize = cappedDrawableSize
-            renderState.markNeedsRedraw()
-            if cappedDrawableSize != rawDrawableSize {
-                MirageLogger.renderer(
-                    "Drawable size capped: \(rawDrawableSize.width)x\(rawDrawableSize.height) -> " +
-                        "\(cappedDrawableSize.width)x\(cappedDrawableSize.height) px (bounds: \(bounds.size))"
-                )
-            } else {
-                MirageLogger
-                    .renderer(
-                        "Drawable size: \(cappedDrawableSize.width)x\(cappedDrawableSize.height) px (bounds: \(bounds.size))"
-                    )
-            }
-            onDrawableMetricsChanged?(currentDrawableMetrics(drawableSize: cappedDrawableSize))
-        }
-    }
-
-    private func currentDrawableMetrics(drawableSize: CGSize) -> MirageDrawableMetrics {
-        let scale = window?.backingScaleFactor ?? 2.0
-        return MirageDrawableMetrics(
-            pixelSize: drawableSize,
-            viewSize: bounds.size,
-            scaleFactor: scale
-        )
-    }
-
-    private func cappedDrawableSize(_ size: CGSize) -> CGSize {
-        guard size.width > 0, size.height > 0 else { return size }
-        var width = size.width
-        var height = size.height
-        if let maxDrawableSize, maxDrawableSize.width <= 0 || maxDrawableSize.height <= 0 {
-            return CGSize(
-                width: alignedEven(width),
-                height: alignedEven(height)
-            )
-        }
-        let aspectRatio = width / height
-        let maxSize = resolvedMaxDrawableSize()
-
-        if width > maxSize.width {
-            width = maxSize.width
-            height = width / aspectRatio
-        }
-
-        if height > maxSize.height {
-            height = maxSize.height
-            width = height * aspectRatio
-        }
-
-        return CGSize(
-            width: alignedEven(width),
-            height: alignedEven(height)
-        )
-    }
-
-    private func alignedEven(_ value: CGFloat) -> CGFloat {
-        let rounded = CGFloat(Int(value.rounded()))
-        let even = rounded - CGFloat(Int(rounded) % 2)
-        return max(2, even)
-    }
-
-    private func resolvedMaxDrawableSize() -> CGSize {
-        let defaultSize = CGSize(width: Self.maxDrawableWidth, height: Self.maxDrawableHeight)
-        guard let maxDrawableSize,
-              maxDrawableSize.width > 0,
-              maxDrawableSize.height > 0 else {
-            return defaultSize
-        }
-        return CGSize(
-            width: min(defaultSize.width, maxDrawableSize.width),
-            height: min(defaultSize.height, maxDrawableSize.height)
-        )
-    }
-
-    override public func draw(_: CGRect) {
-        // Pull-based frame update to avoid MainActor stalls during menu tracking/dragging.
-        drawScheduled = false
-        inFlightDraws += 1
-        guard !renderingSuspended else {
-            finishDraw()
-            return
-        }
-        guard renderState.updateFrameIfNeeded(streamID: streamID) else {
-            finishDraw()
-            return
-        }
-
-        if let pixelFormatType = renderState.currentPixelFormatType { updateOutputFormatIfNeeded(pixelFormatType) }
-
-        let drawable = currentDrawable
-        let pixelBuffer = renderState.currentPixelBuffer
-        guard let drawable, let pixelBuffer else {
-            if drawable == nil {
-                noDrawableSkipsSinceLog &+= 1
-                maybeLogDrawableStarvation()
-                scheduleDrawableRetry()
-            }
-            finishDraw()
-            return
-        }
-
-        guard let renderer else {
-            finishDraw()
-            return
-        }
-
-        renderer.render(
-            pixelBuffer: pixelBuffer,
-            to: drawable,
-            contentRect: renderState.currentContentRect,
-            outputPixelFormat: colorPixelFormat,
-            completion: { [weak self] in
-                Task { @MainActor [weak self] in
-                    self?.finishDraw()
-                }
-            }
-        )
     }
 
     func suspendRendering() {
@@ -256,26 +178,132 @@ public class MirageMetalView: MTKView {
     @MainActor
     func requestDraw() {
         guard !renderingSuspended else { return }
-        if drawScheduled || inFlightDraws >= maxInFlightDraws || drawableRetryScheduled {
-            pendingDraw = true
+        lastScheduledSignalTime = CFAbsoluteTimeGetCurrent()
+        renderDiagnostics.drawRequests &+= 1
+        maybeLogRenderDiagnostics(now: CFAbsoluteTimeGetCurrent())
+        renderScheduler.requestRedraw()
+    }
+
+    @MainActor
+    func renderSchedulerTick() {
+        guard !renderingSuspended else { return }
+        guard !drawableRetryScheduled else { return }
+        guard inFlightRenders < maxInFlightDraws else { return }
+
+        renderDiagnostics.drawAttempts &+= 1
+
+        guard renderState.updateFrameIfNeeded(streamID: streamID) else {
+            if let streamID, MirageFrameCache.shared.queueDepth(for: streamID) == 0 {
+                renderDiagnostics.skipNoEntry &+= 1
+            } else {
+                renderDiagnostics.skipNoFrame &+= 1
+            }
+            maybeLogRenderDiagnostics(now: CFAbsoluteTimeGetCurrent())
             return
         }
-        scheduleDraw()
+
+        if let pixelFormatType = renderState.currentPixelFormatType {
+            updateOutputFormatIfNeeded(pixelFormatType)
+        }
+
+        guard let pixelBuffer = renderState.currentPixelBuffer else {
+            renderDiagnostics.skipNoPixelBuffer &+= 1
+            maybeLogRenderDiagnostics(now: CFAbsoluteTimeGetCurrent())
+            return
+        }
+
+        guard let renderer else {
+            renderDiagnostics.skipNoRenderer &+= 1
+            maybeLogRenderDiagnostics(now: CFAbsoluteTimeGetCurrent())
+            return
+        }
+
+        let drawStartTime = CFAbsoluteTimeGetCurrent()
+        let signalDelay = lastScheduledSignalTime > 0 ? max(0, drawStartTime - lastScheduledSignalTime) : 0
+        let contentRect = renderState.currentContentRect
+        let outputPixelFormat = colorPixelFormat
+        let sequence = renderState.currentSequence
+        let decodeTime = renderState.currentDecodeTime
+        let streamID = streamID
+        let metalLayer = self.metalLayer
+
+        inFlightRenders &+= 1
+
+        renderQueue.async { [weak self] in
+            guard let self else { return }
+            let drawableWaitStart = CFAbsoluteTimeGetCurrent()
+            guard let drawable = metalLayer.nextDrawable() else {
+                let wait = max(0, CFAbsoluteTimeGetCurrent() - drawableWaitStart)
+                Task { @MainActor [weak self] in
+                    self?.handleNoDrawable(signalDelay: signalDelay, drawableWait: wait)
+                }
+                return
+            }
+
+            let drawableWait = max(0, CFAbsoluteTimeGetCurrent() - drawableWaitStart)
+            renderer.render(
+                pixelBuffer: pixelBuffer,
+                to: drawable,
+                contentRect: contentRect,
+                outputPixelFormat: outputPixelFormat,
+                completion: { [weak self] in
+                    guard let self else { return }
+                    Task { @MainActor [weak self] in
+                        self?.handleRenderCompletion(
+                            startTime: drawStartTime,
+                            signalDelay: signalDelay,
+                            drawableWait: drawableWait,
+                            streamID: streamID,
+                            sequence: sequence,
+                            decodeTime: decodeTime
+                        )
+                    }
+                }
+            )
+        }
     }
 
     @MainActor
     private func finishDraw() {
-        inFlightDraws = max(0, inFlightDraws - 1)
-        if pendingDraw, inFlightDraws < maxInFlightDraws, !drawableRetryScheduled {
-            pendingDraw = false
-            scheduleDraw()
-        }
+        inFlightRenders = max(0, inFlightRenders - 1)
     }
 
     @MainActor
-    private func scheduleDraw() {
-        drawScheduled = true
-        draw()
+    private func handleNoDrawable(signalDelay: CFAbsoluteTime, drawableWait: CFAbsoluteTime) {
+        renderDiagnostics.skipNoDrawable &+= 1
+        noDrawableSkipsSinceLog &+= 1
+        maybeLogDrawableStarvation()
+        recordDrawCompletion(
+            startTime: CFAbsoluteTimeGetCurrent(),
+            signalDelay: signalDelay,
+            drawableWait: drawableWait,
+            rendered: false
+        )
+        finishDraw()
+        scheduleDrawableRetry()
+    }
+
+    @MainActor
+    private func handleRenderCompletion(
+        startTime: CFAbsoluteTime,
+        signalDelay: CFAbsoluteTime,
+        drawableWait: CFAbsoluteTime,
+        streamID: StreamID?,
+        sequence: UInt64,
+        decodeTime: CFAbsoluteTime
+    ) {
+        if let streamID {
+            MirageFrameCache.shared.markPresented(sequence: sequence, for: streamID)
+        }
+        renderScheduler.notePresented(sequence: sequence, decodeTime: decodeTime)
+
+        recordDrawCompletion(
+            startTime: startTime,
+            signalDelay: signalDelay,
+            drawableWait: drawableWait,
+            rendered: true
+        )
+        finishDraw()
     }
 
     @MainActor
@@ -291,11 +319,97 @@ public class MirageMetalView: MTKView {
             }
             guard let self else { return }
             drawableRetryScheduled = false
-            if pendingDraw || !renderingSuspended {
-                pendingDraw = false
-                requestDraw()
-            }
+            guard !renderingSuspended else { return }
+            renderState.markNeedsRedraw()
+            renderScheduler.requestRedraw()
         }
+    }
+
+    private func reportDrawableMetricsIfChanged() {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let rawDrawableSize = CGSize(
+            width: bounds.width * scale,
+            height: bounds.height * scale
+        )
+        let cappedSize = cappedDrawableSize(rawDrawableSize)
+        if cappedSize != rawDrawableSize {
+            metalLayer.drawableSize = cappedSize
+        }
+
+        guard cappedSize.width > 0, cappedSize.height > 0 else { return }
+        guard cappedSize != lastReportedDrawableSize else { return }
+
+        lastReportedDrawableSize = cappedSize
+        renderState.markNeedsRedraw()
+
+        if cappedSize != rawDrawableSize {
+            MirageLogger
+                .renderer(
+                    "Drawable size capped: \(rawDrawableSize.width)x\(rawDrawableSize.height) -> " +
+                        "\(cappedSize.width)x\(cappedSize.height) px (bounds: \(bounds.size))"
+                )
+        } else {
+            MirageLogger
+                .renderer(
+                    "Drawable size: \(cappedSize.width)x\(cappedSize.height) px (bounds: \(bounds.size))"
+                )
+        }
+
+        onDrawableMetricsChanged?(currentDrawableMetrics(drawableSize: cappedSize))
+    }
+
+    private func currentDrawableMetrics(drawableSize: CGSize) -> MirageDrawableMetrics {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        return MirageDrawableMetrics(
+            pixelSize: drawableSize,
+            viewSize: bounds.size,
+            scaleFactor: scale
+        )
+    }
+
+    private func cappedDrawableSize(_ size: CGSize) -> CGSize {
+        guard size.width > 0, size.height > 0 else { return size }
+        var width = size.width
+        var height = size.height
+
+        if let maxDrawableSize, maxDrawableSize.width <= 0 || maxDrawableSize.height <= 0 {
+            return CGSize(width: alignedEven(width), height: alignedEven(height))
+        }
+
+        let aspectRatio = width / height
+        let maxSize = resolvedMaxDrawableSize()
+
+        if width > maxSize.width {
+            width = maxSize.width
+            height = width / aspectRatio
+        }
+
+        if height > maxSize.height {
+            height = maxSize.height
+            width = height * aspectRatio
+        }
+
+        return CGSize(width: alignedEven(width), height: alignedEven(height))
+    }
+
+    private func alignedEven(_ value: CGFloat) -> CGFloat {
+        let rounded = CGFloat(Int(value.rounded()))
+        let even = rounded - CGFloat(Int(rounded) % 2)
+        return max(2, even)
+    }
+
+    private func resolvedMaxDrawableSize() -> CGSize {
+        let defaultSize = CGSize(width: Self.maxDrawableWidth, height: Self.maxDrawableHeight)
+        guard let maxDrawableSize,
+              maxDrawableSize.width > 0,
+              maxDrawableSize.height > 0 else {
+            return defaultSize
+        }
+
+        return CGSize(
+            width: min(defaultSize.width, maxDrawableSize.width),
+            height: min(defaultSize.height, maxDrawableSize.height)
+        )
     }
 
     private func maybeLogDrawableStarvation(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) {
@@ -306,11 +420,110 @@ public class MirageMetalView: MTKView {
         }
         guard now - lastNoDrawableLogTime >= 1.0 else { return }
         let elapsedText = (now - lastNoDrawableLogTime).formatted(.number.precision(.fractionLength(1)))
-        MirageLogger.renderer(
-            "Drawable unavailable on macOS view; retries=\(noDrawableSkipsSinceLog) in last \(elapsedText)s"
-        )
+        MirageLogger
+            .renderer(
+                "Drawable unavailable on macOS view; retries=\(noDrawableSkipsSinceLog) in last \(elapsedText)s"
+            )
         noDrawableSkipsSinceLog = 0
         lastNoDrawableLogTime = now
+    }
+
+    private func recordDrawCompletion(
+        startTime: CFAbsoluteTime,
+        signalDelay: CFAbsoluteTime,
+        drawableWait: CFAbsoluteTime,
+        rendered: Bool
+    ) {
+        if rendered {
+            renderDiagnostics.drawRendered &+= 1
+        }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let renderLatency = max(0, now - startTime)
+
+        if drawStatsStartTime == 0 {
+            drawStatsStartTime = now
+        }
+
+        drawStatsCount &+= 1
+        drawStatsSignalDelayTotal += signalDelay
+        drawStatsSignalDelayMax = max(drawStatsSignalDelayMax, signalDelay)
+        drawStatsDrawableWaitTotal += drawableWait
+        drawStatsDrawableWaitMax = max(drawStatsDrawableWaitMax, drawableWait)
+        drawStatsRenderLatencyTotal += renderLatency
+        drawStatsRenderLatencyMax = max(drawStatsRenderLatencyMax, renderLatency)
+
+        let elapsed = now - drawStatsStartTime
+        guard elapsed >= 2.0 else {
+            maybeLogRenderDiagnostics(now: now)
+            return
+        }
+
+        if MirageLogger.isEnabled(.renderer) {
+            let count = max(1, Double(drawStatsCount))
+            let fps = count / elapsed
+            let signalDelayAvgMs = (drawStatsSignalDelayTotal / count) * 1000
+            let signalDelayMaxMs = drawStatsSignalDelayMax * 1000
+            let drawableWaitAvgMs = (drawStatsDrawableWaitTotal / count) * 1000
+            let drawableWaitMaxMs = drawStatsDrawableWaitMax * 1000
+            let renderLatencyAvgMs = (drawStatsRenderLatencyTotal / count) * 1000
+            let renderLatencyMaxMs = drawStatsRenderLatencyMax * 1000
+
+            let fpsText = fps.formatted(.number.precision(.fractionLength(1)))
+            let signalDelayAvgText = signalDelayAvgMs.formatted(.number.precision(.fractionLength(1)))
+            let signalDelayMaxText = signalDelayMaxMs.formatted(.number.precision(.fractionLength(1)))
+            let drawableWaitAvgText = drawableWaitAvgMs.formatted(.number.precision(.fractionLength(1)))
+            let drawableWaitMaxText = drawableWaitMaxMs.formatted(.number.precision(.fractionLength(1)))
+            let renderLatencyAvgText = renderLatencyAvgMs.formatted(.number.precision(.fractionLength(1)))
+            let renderLatencyMaxText = renderLatencyMaxMs.formatted(.number.precision(.fractionLength(1)))
+
+            MirageLogger
+                .renderer(
+                    "Render timings: fps=\(fpsText) signalDelay=\(signalDelayAvgText)/\(signalDelayMaxText)ms " +
+                        "drawableWait=\(drawableWaitAvgText)/\(drawableWaitMaxText)ms " +
+                        "renderLatency=\(renderLatencyAvgText)/\(renderLatencyMaxText)ms"
+                )
+        }
+
+        maybeLogRenderDiagnostics(now: now)
+
+        drawStatsStartTime = now
+        drawStatsCount = 0
+        drawStatsSignalDelayTotal = 0
+        drawStatsSignalDelayMax = 0
+        drawStatsDrawableWaitTotal = 0
+        drawStatsDrawableWaitMax = 0
+        drawStatsRenderLatencyTotal = 0
+        drawStatsRenderLatencyMax = 0
+    }
+
+    private func maybeLogRenderDiagnostics(now: CFAbsoluteTime) {
+        guard MirageLogger.isEnabled(.renderer) else { return }
+        if renderDiagnostics.startTime == 0 {
+            renderDiagnostics.startTime = now
+            return
+        }
+        let elapsed = now - renderDiagnostics.startTime
+        guard elapsed >= 2.0 else { return }
+
+        let safeElapsed = max(0.001, elapsed)
+        let requestFPS = Double(renderDiagnostics.drawRequests) / safeElapsed
+        let drawAttemptFPS = Double(renderDiagnostics.drawAttempts) / safeElapsed
+        let renderedFPS = Double(renderDiagnostics.drawRendered) / safeElapsed
+
+        let requestText = requestFPS.formatted(.number.precision(.fractionLength(1)))
+        let drawAttemptText = drawAttemptFPS.formatted(.number.precision(.fractionLength(1)))
+        let renderedText = renderedFPS.formatted(.number.precision(.fractionLength(1)))
+
+        MirageLogger
+            .renderer(
+                "Render diag: drawRequests=\(requestText)fps drawAttempts=\(drawAttemptText)fps " +
+                    "rendered=\(renderedText)fps skips(noEntry=\(renderDiagnostics.skipNoEntry) " +
+                    "noFrame=\(renderDiagnostics.skipNoFrame) noDrawable=\(renderDiagnostics.skipNoDrawable) " +
+                    "noRenderer=\(renderDiagnostics.skipNoRenderer) noPixelBuffer=\(renderDiagnostics.skipNoPixelBuffer))"
+            )
+
+        renderDiagnostics.reset(now: now)
     }
 
     private func updateOutputFormatIfNeeded(_ pixelFormatType: OSType) {
@@ -334,8 +547,33 @@ public class MirageMetalView: MTKView {
 
         guard colorPixelFormat != outputPixelFormat else { return }
         colorPixelFormat = outputPixelFormat
-        colorspace = colorSpace
+        metalLayer.pixelFormat = outputPixelFormat
+        metalLayer.colorspace = colorSpace
         renderState.markNeedsRedraw()
+    }
+}
+
+private struct RenderDiagnostics {
+    var startTime: CFAbsoluteTime = 0
+    var drawRequests: UInt64 = 0
+    var drawAttempts: UInt64 = 0
+    var drawRendered: UInt64 = 0
+    var skipNoEntry: UInt64 = 0
+    var skipNoFrame: UInt64 = 0
+    var skipNoDrawable: UInt64 = 0
+    var skipNoRenderer: UInt64 = 0
+    var skipNoPixelBuffer: UInt64 = 0
+
+    mutating func reset(now: CFAbsoluteTime) {
+        startTime = now
+        drawRequests = 0
+        drawAttempts = 0
+        drawRendered = 0
+        skipNoEntry = 0
+        skipNoFrame = 0
+        skipNoDrawable = 0
+        skipNoRenderer = 0
+        skipNoPixelBuffer = 0
     }
 }
 #endif
